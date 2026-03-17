@@ -1,0 +1,81 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// User model for authentication and RBAC
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  username  String   @unique
+  password  String   // hashed password
+  role      UserRole @default(user)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations (to be used by auth-and-data-model workstream)
+  sessions ChatSession[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  admin
+  user
+}
+
+// System configuration for LLM provider settings
+// Singleton pattern: only one record should exist
+model SystemConfig {
+  id            String   @id @default(cuid())
+  openaiApiKey  String?  @map("openai_api_key") @db.Text
+  openaiBaseUrl String?  @map("openai_base_url")
+  // Allowed models stored as JSON array
+  allowedModels Json     @default("[]") @map("allowed_models")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  updatedBy     String?  @map("updated_by")
+
+  @@map("system_config")
+}
+
+// Chat sessions for organizing conversations
+model ChatSession {
+  id        String   @id @default(cuid())
+  title     String   @default("New Chat")
+  userId    String   @map("user_id")
+  model     String   // The model used for this chat
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+
+  @@index([userId])
+  @@map("chat_sessions")
+}
+
+// Individual chat messages
+model ChatMessage {
+  id        String       @id @default(cuid())
+  sessionId String       @map("session_id")
+  role      MessageRole
+  content   String       @db.LongText
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  // Relations
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("chat_messages")
+}
+
+enum MessageRole {
+  user
+  assistant
+  system
+}
