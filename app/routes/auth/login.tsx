@@ -4,8 +4,8 @@ import { getSession, commitSession } from "~/sessions";
 
 export function meta({}: Route.MetaArgs) {
   return [
-    { title: "Login - OWU" },
-    { name: "description", content: "Sign in to OWU" },
+    { title: "登录 - OWU" },
+    { name: "description", content: "登录 OWU" },
   ];
 }
 
@@ -39,11 +39,11 @@ export async function action({ request }: Route.ActionArgs) {
   const errors: Record<string, string> = {};
   
   if (!emailOrUsername || emailOrUsername.trim() === "") {
-    errors.emailOrUsername = "Email or username is required";
+    errors.emailOrUsername = "请输入邮箱或用户名";
   }
   
   if (!password || password === "") {
-    errors.password = "Password is required";
+    errors.password = "请输入密码";
   }
   
   if (Object.keys(errors).length > 0) {
@@ -55,7 +55,7 @@ export async function action({ request }: Route.ActionArgs) {
   
   if (!user) {
     return { 
-      errors: { general: "Invalid email/username or password" },
+      errors: { general: "邮箱/用户名或密码错误" },
       values: { emailOrUsername }
     };
   }
@@ -86,9 +86,9 @@ export default function LoginPage() {
               <span className="text-white font-bold text-2xl">O</span>
             </div>
           </Link>
-          <h1 className="text-2xl font-bold tracking-tight">Welcome back</h1>
+          <h1 className="text-2xl font-bold tracking-tight">欢迎回来</h1>
           <p className="text-gray-600 dark:text-gray-400 mt-2">
-            Sign in to your OWU account
+            登录您的 OWU 账户
           </p>
         </div>
 
@@ -113,7 +113,7 @@ export default function LoginPage() {
                 htmlFor="emailOrUsername"
                 className="block text-sm font-medium mb-1.5 text-gray-700 dark:text-gray-300"
               >
-                Email or Username
+                邮箱或用户名
               </label>
               <input
                 type="text"
@@ -142,13 +142,13 @@ export default function LoginPage() {
                 htmlFor="password"
                 className="block text-sm font-medium mb-1.5 text-gray-700 dark:text-gray-300"
               >
-                Password
+                密码
               </label>
               <input
                 type="password"
                 id="password"
                 name="password"
-                placeholder="••••••••"
+                placeholder="请输入密码"
                 className={`w-full px-4 py-2.5 rounded-xl border bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
                   actionData?.errors?.password
                     ? 'border-red-500 focus:border-red-500'
@@ -175,42 +175,29 @@ export default function LoginPage() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                   </svg>
-                  Signing in...
+                  登录中...
                 </span>
               ) : (
-                "Sign In"
+                "登录"
               )}
             </button>
           </Form>
 
           <div className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
-            Don't have an account?{" "}
+            还没有账户？{" "}
             <Link
               to="/register"
               className="text-blue-600 hover:text-blue-700 font-medium hover:underline"
             >
-              Create one
+              立即注册
             </Link>
           </div>
-        </div>
-
-        {/* Back link */}
-        <div className="mt-6 text-center">
-          <Link
-            to="/"
-            className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
-            Back to home
-          </Link>
         </div>
 
         {/* Hint for default admin */}
         <div className="mt-8 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800">
           <p className="text-xs text-blue-700 dark:text-blue-400 text-center">
-            <strong>Default admin:</strong> username <code className="bg-blue-100 dark:bg-blue-800 px-1.5 py-0.5 rounded">admin</code>, password <code className="bg-blue-100 dark:bg-blue-800 px-1.5 py-0.5 rounded">admin123</code>
+            <strong>默认管理员：</strong>用户名 <code className="bg-blue-100 dark:bg-blue-800 px-1.5 py-0.5 rounded">admin</code>，密码 <code className="bg-blue-100 dark:bg-blue-800 px-1.5 py-0.5 rounded">admin123</code>
           </p>
         </div>
       </div>

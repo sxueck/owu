@@ -47,9 +47,11 @@ export async function action({ request, params }: Route.ActionArgs) {
 
   // Parse request body
   let content: string;
+  let model: string | undefined;
   try {
     const body = await request.json();
     content = body.content;
+    model = typeof body.model === "string" ? body.model : undefined;
     if (!content || typeof content !== "string" || content.trim() === "") {
       return new Response("Message content is required", { status: 400 });
     }
@@ -65,7 +67,7 @@ export async function action({ request, params }: Route.ActionArgs) {
       try {
         await sendMessageStream(
           user,
-          { sessionId, content: content.trim() },
+          { sessionId, content: content.trim(), model },
           async (event) => {
             const sseData = serializeSSE(event);
             controller.enqueue(encoder.encode(sseData));

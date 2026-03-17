@@ -1,5 +1,6 @@
 import type { Route } from "./+types/index";
-import { Form, useLoaderData, useActionData, useNavigation, Link, redirect } from "react-router";
+import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } from "react-router";
+import { useEffect, useRef, useState } from "react";
 import { getSession } from "~/sessions";
 
 export function meta({}: Route.MetaArgs) {
@@ -9,9 +10,6 @@ export function meta({}: Route.MetaArgs) {
   ];
 }
 
-/**
- * Loader: Get available models for the user to choose from
- */
 export async function loader({ request }: Route.LoaderArgs) {
   const session = await getSession(request.headers.get("Cookie"));
   const { requireUser } = await import("~/lib/server/session.server");
@@ -23,9 +21,6 @@ export async function loader({ request }: Route.LoaderArgs) {
   return { models };
 }
 
-/**
- * Action: Create a new chat session
- */
 export async function action({ request }: Route.ActionArgs) {
   const session = await getSession(request.headers.get("Cookie"));
   const { requireUser } = await import("~/lib/server/session.server");
@@ -34,21 +29,31 @@ export async function action({ request }: Route.ActionArgs) {
 
   const formData = await request.formData();
   const model = formData.get("model") as string;
-  const title = formData.get("title") as string;
+  const prompt = formData.get("prompt") as string;
 
-  // Validate model is selected
   if (!model || model.trim() === "") {
     return { error: "Please select a model" };
   }
 
+  if (!prompt || prompt.trim() === "") {
+    return { error: "Please enter a question" };
+  }
+
+  const normalizedPrompt = prompt.trim();
+  const sessionTitle = normalizedPrompt.length > 60 ? `${normalizedPrompt.slice(0, 57)}...` : normalizedPrompt;
+
   try {
     const chatSession = await createChatSession(user, {
       model: model.trim(),
-      title: title?.trim() || undefined,
+      title: sessionTitle,
     });
 
-    // Redirect to the new chat session
-    return redirect(`/chat/${chatSession.id}`);
+    // 将 prompt 编码到 URL 参数中，进入对话页后会自动发送
+    const params = new URLSearchParams();
+    params.set("q", encodeURIComponent(normalizedPrompt));
+    params.set("model", model.trim());
+    
+    return redirect(`/chat/${chatSession.id}?${params.toString()}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to create chat session";
     return { error: message };
@@ -60,163 +65,199 @@ export default function ChatIndexPage() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state === "submitting";
+  const [selectedModel, setSelectedModel] = useState(models[0]?.id ?? "");
+  const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const modelMenuRef = useRef<HTMLDivElement>(null);
+  const activeModel = models.find((model) => model.id === selectedModel) ?? models[0];
+
+  useEffect(() => {
+    if (!isModelMenuOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (!modelMenuRef.current?.contains(target)) {
+        setIsModelMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [isModelMenuOpen]);
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 overflow-y-auto">
-      <div className="w-full max-w-lg animate-slide-up">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <div className="w-20 h-20 bg-gradient-to-br from-blue-100 to-blue-50 dark:from-blue-900/40 dark:to-blue-800/20 rounded-3xl flex items-center justify-center mx-auto mb-5 shadow-sm">
-            <svg className="w-10 h-10 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-            </svg>
-          </div>
-          <h2 className="text-2xl md:text-3xl font-bold tracking-tight mb-2">Start a conversation</h2>
-          <p className="text-gray-600 dark:text-gray-400">
-            Select a model and start chatting with AI
-          </p>
-        </div>
-
-        {/* Empty state - no models configured */}
-        {models.length === 0 ? (
-          <div className="p-6 bg-amber-50 dark:bg-amber-900/20 rounded-2xl border border-amber-200 dark:border-amber-800 text-center">
-            <div className="w-12 h-12 bg-amber-100 dark:bg-amber-800 rounded-xl flex items-center justify-center mx-auto mb-4">
-              <svg className="w-6 h-6 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+    <div className="relative flex flex-1 flex-col overflow-y-auto px-4 py-6 sm:px-6 lg:px-12 lg:py-8 xl:px-16">
+      <div className="flex min-h-[44px] items-start">
+        {models.length > 0 ? (
+          <div ref={modelMenuRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setIsModelMenuOpen((open) => !open)}
+              className="flex items-center gap-2 rounded-lg px-2 py-1.5 transition-all duration-200 ease-out hover:bg-white/60 hover:shadow-sm active:scale-95"
+              aria-haspopup="listbox"
+              aria-expanded={isModelMenuOpen}
+            >
+              <span className="min-w-[150px] text-left text-base font-medium text-[var(--chat-ink)]">
+                {activeModel?.label ?? selectedModel}
+              </span>
+              <svg
+                className={[
+                  "h-4 w-4 text-[var(--chat-muted)] transition-transform duration-200",
+                  isModelMenuOpen ? "rotate-180" : "rotate-0",
+                ].join(" ")}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="m6 9 6 6 6-6" />
               </svg>
-            </div>
-            <h3 className="font-semibold text-amber-900 dark:text-amber-100 mb-2">
-              No models available
-            </h3>
-            <p className="text-amber-800 dark:text-amber-200 mb-4 text-sm">
-              An administrator needs to configure available models before you can start chatting.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-2 justify-center">
-              <Link
-                to="/admin"
-                className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors text-sm font-medium"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                Go to Admin
-              </Link>
-              <Link
-                to="/"
-                className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors text-sm font-medium"
-              >
-                Back to Home
-              </Link>
-            </div>
+            </button>
+
+            {isModelMenuOpen && (
+              <div className="absolute left-0 top-[calc(100%+0.6rem)] z-20 min-w-[260px] overflow-hidden rounded-xl border border-[var(--chat-line)] bg-white p-2 shadow-lg animate-fade-in-up">
+                <div className="space-y-1">
+                  {models.map((model, index) => {
+                    const isActive = model.id === selectedModel;
+
+                    return (
+                      <button
+                        key={model.id}
+                        type="button"
+                        role="option"
+                        aria-selected={isActive}
+                        onClick={() => {
+                          setSelectedModel(model.id);
+                          setIsModelMenuOpen(false);
+                        }}
+                        className={[
+                          "flex w-full items-center justify-between rounded-[16px] px-3 py-2.5 text-left text-sm",
+                          "transition-all duration-200 ease-out",
+                          "hover:translate-x-0.5",
+                          isActive
+                            ? "bg-[rgba(199,103,58,0.12)] text-[var(--chat-ink)]"
+                            : "text-[var(--chat-ink)] hover:bg-white/80",
+                        ].join(" ")}
+                        style={{ animationDelay: `${index * 30}ms` }}
+                      >
+                        <span className="truncate pr-4">{model.label}</span>
+                        {isActive && (
+                          <span className="rounded-full bg-[var(--chat-accent)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-white animate-fade-in">
+                            Active
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
-          /* Form */
-          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm">
-            <Form method="post" className="space-y-6">
-              {/* Error message */}
-              {actionData?.error && (
-                <div className="p-4 bg-red-50 dark:bg-red-900/20 rounded-xl border border-red-200 dark:border-red-800 animate-fade-in">
-                  <div className="flex items-start gap-2">
-                    <svg className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                    </svg>
-                    <p className="text-sm text-red-800 dark:text-red-200">
-                      {actionData.error}
-                    </p>
+          <div className="rounded-[22px] border border-[rgba(199,103,58,0.2)] bg-[rgba(199,103,58,0.08)] px-4 py-3 text-sm text-[var(--chat-muted)]">
+            No model available
+          </div>
+        )}
+      </div>
+
+      <div className="relative mx-auto flex w-full max-w-[1560px] flex-1 flex-col">
+        <div className="flex flex-1 items-center justify-center px-0 py-8 sm:py-12 lg:py-16 xl:py-20">
+          <div className="w-full max-w-[1080px]">
+            {models.length === 0 ? (
+              <div className="rounded-[24px] border border-[rgba(199,103,58,0.2)] bg-[rgba(199,103,58,0.08)] p-6 text-center">
+                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-white text-[var(--chat-accent)] shadow-sm">
+                  <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 9v3.75m0 3.75h.01M10.33 3.86 1.82 18a2.25 2.25 0 0 0 1.93 3.37h16.5A2.25 2.25 0 0 0 22.18 18L13.67 3.86a2.25 2.25 0 0 0-3.34 0Z" />
+                  </svg>
+                </div>
+                <h2 className="mt-4 font-serif text-2xl text-[var(--chat-ink)]">No models available</h2>
+                <p className="mt-3 text-sm leading-6 text-[var(--chat-muted)]">
+                  An administrator needs to configure at least one model before a session can start.
+                </p>
+                <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:justify-center">
+                  <Link
+                    to="/admin"
+                    className="rounded-full bg-[var(--chat-forest)] px-5 py-2.5 text-sm font-medium text-white hover:bg-[#1f463b]"
+                  >
+                    Go to admin
+                  </Link>
+                  <Link
+                    to="/chat"
+                    className="rounded-full border border-[var(--chat-line)] bg-white px-5 py-2.5 text-sm font-medium text-[var(--chat-ink)] hover:bg-white/80"
+                  >
+                    Stay here
+                  </Link>
+                </div>
+              </div>
+            ) : (
+              <Form method="post" className="mx-auto w-full max-w-[860px]">
+                <input type="hidden" name="model" value={selectedModel} />
+
+                {actionData?.error && (
+                  <div className="mb-3 rounded-[20px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    {actionData.error}
+                  </div>
+                )}
+
+                <div className="chat-input-shadow chat-input-shell rounded-[28px] border border-[var(--chat-line)] bg-white/92 px-4 py-3 sm:px-5 sm:py-4">
+                  <textarea
+                    ref={textareaRef}
+                    id="prompt"
+                    name="prompt"
+                    placeholder="How can I help you today?"
+                    rows={4}
+                    className="chat-textarea min-h-[120px] max-h-[320px] w-full resize-none border-none bg-transparent px-1 py-2 text-[15px] leading-relaxed text-[var(--chat-ink)] outline-none placeholder:text-[var(--chat-muted)]/70 sm:text-base"
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        const form = event.currentTarget.form;
+                        form?.requestSubmit();
+                      }
+                    }}
+                    onInput={(event) => {
+                      const target = event.target as HTMLTextAreaElement;
+                      target.style.height = "auto";
+                      target.style.height = `${Math.min(target.scrollHeight, 320)}px`;
+                    }}
+                  />
+
+                  <div className="mt-3 flex items-center justify-between border-t border-[var(--chat-line)] pt-3 text-[var(--chat-muted)]">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-full border border-[var(--chat-line)] bg-white/70">+</span>
+                      <span className="flex h-7 w-7 items-center justify-center rounded-full border border-[var(--chat-line)] bg-white/70">
+                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 7h16M4 12h10M4 17h7" />
+                        </svg>
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <span className="hidden text-xs sm:inline">{activeModel?.label ?? selectedModel}</span>
+                      <button
+                        type="submit"
+                        disabled={isSubmitting}
+                        className="flex h-9 w-9 items-center justify-center rounded-full bg-[#1f1f1f] text-white transition-all duration-200 ease-out hover:bg-black hover:shadow-md hover:scale-105 active:scale-95 disabled:opacity-60 disabled:hover:scale-100 disabled:hover:shadow-none"
+                        aria-label="Start session"
+                      >
+                        {isSubmitting ? (
+                          <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4} fill="none" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8V0C5.37 0 0 5.37 0 12h4Zm2 5.29A7.94 7.94 0 0 1 4 12H0c0 3.04 1.14 5.82 3 7.94l3-2.65Z" />
+                          </svg>
+                        ) : (
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14m-6-6 6 6-6 6" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
-              )}
-
-              {/* Model selection */}
-              <div className="space-y-2">
-                <label
-                  htmlFor="model"
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300"
-                >
-                  Select Model <span className="text-red-500">*</span>
-                </label>
-                <select
-                  id="model"
-                  name="model"
-                  required
-                  className="w-full px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                >
-                  <option value="">Choose a model...</option>
-                  {models.map((model) => (
-                    <option key={model} value={model}>
-                      {model}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  Only models allowed by your administrator are shown
-                </p>
-              </div>
-
-              {/* Title input */}
-              <div className="space-y-2">
-                <label
-                  htmlFor="title"
-                  className="block text-sm font-medium text-gray-700 dark:text-gray-300"
-                >
-                  Chat Title <span className="text-gray-400 font-normal">(optional)</span>
-                </label>
-                <input
-                  type="text"
-                  id="title"
-                  name="title"
-                  placeholder="e.g., Project Planning, Code Review..."
-                  className="w-full px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                />
-              </div>
-
-              {/* Submit button */}
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 shadow-sm"
-              >
-                {isSubmitting ? (
-                  <>
-                    <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                    Creating session...
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                    Start Chat
-                  </>
-                )}
-              </button>
-            </Form>
+              </Form>
+            )}
           </div>
-        )}
-
-        {/* Tips section */}
-        {models.length > 0 && (
-          <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800">
-            <div className="flex items-start gap-3">
-              <svg className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <div>
-                <h4 className="text-sm font-medium text-blue-900 dark:text-blue-100 mb-1">Pro tip</h4>
-                <p className="text-sm text-blue-800 dark:text-blue-300">
-                  Choose a descriptive title to help you find this conversation later. You can always rename it from the chat page.
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
+        </div>
       </div>
     </div>
   );

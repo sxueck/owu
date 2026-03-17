@@ -9,16 +9,33 @@ export { env } from './env.server';
 
 // System Configuration
 export {
+  composeModelRef,
   getSystemConfig,
   getPublicConfig,
+  getAvailableModelOptions,
+  getProviderApiBaseUrl,
+  getProviderModelsInfoUrl,
   saveSystemConfig,
   normalizeAllowedModels,
+  normalizeProviderDrafts,
   parseModelsInput,
   formatModelsForDisplay,
   isModelAllowed,
   isOpenAIConfigured,
+  parseModelRef,
+  resolveModelReference,
+  resolveModelReferenceFromProviders,
 } from './config.server';
-export type { SystemConfigData, PublicConfigData, SaveSystemConfigInput } from './config.server';
+export type {
+  ModelOption,
+  OpenAIProviderConfig,
+  ProviderDraftInput,
+  PublicConfigData,
+  PublicOpenAIProviderConfig,
+  ResolvedModelReference,
+  SaveSystemConfigInput,
+  SystemConfigData,
+} from './config.server';
 
 // Session Management
 export {
@@ -73,6 +90,7 @@ export type {
 
 // OpenAI Service
 export {
+  fetchProviderModels,
   sendChatCompletion,
   streamChatCompletion,
   testOpenAIConnection,
@@ -81,4 +99,5 @@ export type {
   ChatCompletionMessage,
   ChatCompletionOptions,
   ChatCompletionResult,
+  FetchProviderModelsInput,
 } from './openai.server';

@@ -5,7 +5,11 @@ import {
   type ChatCompletionMessage,
   type ChatCompletionResult,
 } from './openai.server';
-import { getSystemConfig, isModelAllowed, isOpenAIConfigured } from './config.server';
+import {
+  getAvailableModelOptions,
+  isOpenAIConfigured,
+  resolveModelReference,
+} from './config.server';
 import { assertChatSessionOwnership } from './ownership.server';
 import type { SessionData } from './session.server';
 
@@ -19,14 +23,24 @@ export interface CreateChatSessionInput {
   model: string;
 }
 
+export interface AvailableChatModel {
+  id: string;
+  model: string;
+  providerId: string;
+  providerLabel: string;
+  label: string;
+}
+
 export interface SendMessageInput {
   sessionId: string;
   content: string;
+  model?: string;
 }
 
 export interface ChatMessageOutput {
   id: string;
   role: 'user' | 'assistant' | 'system';
+  model?: string | null;
   content: string;
   createdAt: Date;
 }
@@ -34,6 +48,15 @@ export interface ChatMessageOutput {
 export interface SendMessageResult {
   userMessage: ChatMessageOutput;
   assistantMessage: ChatMessageOutput;
+}
+
+function sanitizeSessionTitle(title?: string): string {
+  const plainTitle = (title ?? '')
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u200D\uFE0F]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return plainTitle || 'New Chat';
 }
 
 /**
@@ -48,8 +71,8 @@ export async function createChatSession(
   input: CreateChatSessionInput
 ): Promise<{ id: string; title: string; model: string; createdAt: Date }> {
   // Validate model is allowed
-  const allowed = await isModelAllowed(input.model);
-  if (!allowed) {
+  const resolvedModel = await resolveModelReference(input.model);
+  if (!resolvedModel) {
     throw new Error(`Model "${input.model}" is not in the allowed list. Please select a different model.`);
   }
 
@@ -63,17 +86,17 @@ export async function createChatSession(
   const session = await prisma.chatSession.create({
     data: {
       userId: user.userId,
-      title: input.title?.trim() || 'New Chat',
-      model: input.model,
+      title: sanitizeSessionTitle(input.title),
+      model: resolvedModel.id,
     },
   });
 
   return {
     id: session.id,
     title: session.title,
-    model: session.model,
-    createdAt: session.createdAt,
-  };
+      model: resolvedModel.id,
+      createdAt: session.createdAt,
+    };
 }
 
 /**
@@ -103,16 +126,19 @@ export async function sendMessage(
     throw new Error('OpenAI is not configured. Please contact administrator.');
   }
 
-  // Get current config for validation
-  const config = await getSystemConfig();
-  if (!config) {
-    throw new Error('System configuration not found.');
-  }
+  const sessionModelId = input.model?.trim() || session.model;
 
   // Validate model is still allowed (admin may have changed whitelist)
-  const allowed = await isModelAllowed(session.model);
-  if (!allowed) {
-    throw new Error(`Model "${session.model}" is no longer available. Please create a new session with an allowed model.`);
+  const resolvedModel = await resolveModelReference(sessionModelId);
+  if (!resolvedModel) {
+    throw new Error(`Model "${sessionModelId}" is no longer available. Please select a different model.`);
+  }
+
+  if (session.model !== resolvedModel.id) {
+    await prisma.chatSession.update({
+      where: { id: input.sessionId },
+      data: { model: resolvedModel.id },
+    });
   }
 
   // Step 3: Save user message
@@ -138,7 +164,8 @@ export async function sendMessage(
     }));
 
     const completion = await sendChatCompletion({
-      model: session.model,
+      model: resolvedModel.model,
+      provider: resolvedModel.provider,
       messages,
     });
 
@@ -147,6 +174,7 @@ export async function sendMessage(
       data: {
         sessionId: input.sessionId,
         role: 'assistant',
+        model: resolvedModel.id,
         content: completion.content,
       },
     });
@@ -161,12 +189,14 @@ export async function sendMessage(
       userMessage: {
         id: userMessage.id,
         role: 'user',
+        model: null,
         content: userMessage.content,
         createdAt: userMessage.createdAt,
       },
       assistantMessage: {
         id: assistantMessage.id,
         role: 'assistant',
+        model: resolvedModel.id,
         content: assistantMessage.content,
         createdAt: assistantMessage.createdAt,
       },
@@ -183,9 +213,8 @@ export async function sendMessage(
  * Get available models for the user to choose from.
  * Returns the allowed models list from system config.
  */
-export async function getAvailableModels(): Promise<string[]> {
-  const config = await getSystemConfig();
-  return config?.allowedModels || [];
+export async function getAvailableModels(): Promise<AvailableChatModel[]> {
+  return getAvailableModelOptions();
 }
 
 /**
@@ -201,7 +230,7 @@ export async function updateSessionTitle(
 
   await prisma.chatSession.update({
     where: { id: sessionId },
-    data: { title: title.trim() || 'New Chat' },
+    data: { title: sanitizeSessionTitle(title) },
   });
 }
 
@@ -232,13 +261,21 @@ export async function getChatSessionMeta(
   id: string;
   title: string;
   model: string;
+  modelName: string;
+  modelLabel: string;
+  providerLabel: string | null;
   createdAt: Date;
 }> {
   const session = await assertChatSessionOwnership(sessionId, user);
+  const resolvedModel = await resolveModelReference(session.model);
+
   return {
     id: session.id,
     title: session.title,
     model: session.model,
+    modelName: resolvedModel?.model ?? session.model,
+    modelLabel: resolvedModel?.label ?? session.model,
+    providerLabel: resolvedModel?.providerLabel ?? null,
     createdAt: session.createdAt,
   };
 }
@@ -283,20 +320,21 @@ export async function sendMessageStream(
     throw error;
   }
 
-  // Get current config for validation
-  const config = await getSystemConfig();
-  if (!config) {
-    const error = new Error('System configuration not found.');
+  const sessionModelId = input.model?.trim() || session.model;
+
+  // Validate model is still allowed (admin may have changed whitelist)
+  const resolvedModel = await resolveModelReference(sessionModelId);
+  if (!resolvedModel) {
+    const error = new Error(`Model "${sessionModelId}" is no longer available. Please select a different model.`);
     await onEvent({ type: 'error', message: error.message });
     throw error;
   }
 
-  // Validate model is still allowed (admin may have changed whitelist)
-  const allowed = await isModelAllowed(session.model);
-  if (!allowed) {
-    const error = new Error(`Model "${session.model}" is no longer available. Please create a new session with an allowed model.`);
-    await onEvent({ type: 'error', message: error.message });
-    throw error;
+  if (session.model !== resolvedModel.id) {
+    await prisma.chatSession.update({
+      where: { id: input.sessionId },
+      data: { model: resolvedModel.id },
+    });
   }
 
   // Step 3: Save user message
@@ -309,9 +347,7 @@ export async function sendMessageStream(
   });
 
   // Notify stream start
-  await onEvent({ type: 'start', sessionId: input.sessionId, model: session.model });
-
-  let assistantMessageId: string | null = null;
+  await onEvent({ type: 'start', sessionId: input.sessionId, model: resolvedModel.model });
 
   try {
     // Step 4: Get conversation history and call OpenAI with streaming
@@ -329,7 +365,8 @@ export async function sendMessageStream(
     // Step 5: Stream the response
     await streamChatCompletion(
       {
-        model: session.model,
+        model: resolvedModel.model,
+        provider: resolvedModel.provider,
         messages,
       },
       {
@@ -342,10 +379,10 @@ export async function sendMessageStream(
             data: {
               sessionId: input.sessionId,
               role: 'assistant',
+              model: resolvedModel.id,
               content: result.content,
             },
           });
-          assistantMessageId = assistantMessage.id;
 
           // Update session's updatedAt timestamp
           await prisma.chatSession.update({

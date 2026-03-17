@@ -1,4 +1,5 @@
 import { prisma } from './db.server';
+import { getSystemConfig, resolveModelReferenceFromProviders } from './config.server';
 import type { SessionData } from './session.server';
 
 /**
@@ -50,6 +51,9 @@ export async function getUserChatSessions(
   id: string;
   title: string;
   model: string;
+  modelName: string;
+  modelLabel: string;
+  providerLabel: string | null;
   createdAt: Date;
   updatedAt: Date;
   _count?: { messages: number };
@@ -58,7 +62,7 @@ export async function getUserChatSessions(
     ? {}
     : { userId: user.userId };
 
-  return prisma.chatSession.findMany({
+  const sessions = await prisma.chatSession.findMany({
     where,
     orderBy: { updatedAt: 'desc' },
     select: {
@@ -72,6 +76,21 @@ export async function getUserChatSessions(
       },
     },
   });
+
+  const config = await getSystemConfig();
+
+  return sessions.map((session) => {
+    const resolvedModel = config
+      ? resolveModelReferenceFromProviders(session.model, config.providers)
+      : null;
+
+    return {
+      ...session,
+      modelName: resolvedModel?.model ?? session.model,
+      modelLabel: resolvedModel?.label ?? session.model,
+      providerLabel: resolvedModel?.providerLabel ?? null,
+    };
+  });
 }
 
 /**
@@ -83,21 +102,40 @@ export async function getChatMessages(
 ): Promise<Array<{
   id: string;
   role: 'user' | 'assistant' | 'system';
+  model: string | null;
+  modelLabel: string | null;
   content: string;
   createdAt: Date;
 }>> {
   // First verify ownership
-  await assertChatSessionOwnership(sessionId, user);
+  const session = await assertChatSessionOwnership(sessionId, user);
 
-  return prisma.chatMessage.findMany({
+  const messages = await prisma.chatMessage.findMany({
     where: { sessionId },
     orderBy: { createdAt: 'asc' },
     select: {
       id: true,
       role: true,
+      model: true,
       content: true,
       createdAt: true,
     },
+  });
+
+  const config = await getSystemConfig();
+  const fallbackModel = config
+    ? resolveModelReferenceFromProviders(session.model, config.providers)
+    : null;
+
+  return messages.map((message) => {
+    const resolvedModel = message.model && config
+      ? resolveModelReferenceFromProviders(message.model, config.providers)
+      : null;
+
+    return {
+      ...message,
+      modelLabel: resolvedModel?.label ?? (message.role === 'assistant' ? fallbackModel?.label ?? session.model : null),
+    };
   });
 }
 

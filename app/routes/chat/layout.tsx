@@ -1,7 +1,7 @@
 import type { Route } from "./+types/layout";
-import { Outlet, Link, Form, useLoaderData } from "react-router";
+import { Form, Link, NavLink, Outlet, redirect, useLoaderData, useLocation, useSubmit } from "react-router";
 import { getSession } from "~/sessions";
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -10,220 +10,426 @@ export function meta({}: Route.MetaArgs) {
   ];
 }
 
-/**
- * Loader: Require authentication and load user's chat sessions
- */
 export async function loader({ request }: Route.LoaderArgs) {
   const session = await getSession(request.headers.get("Cookie"));
   const { requireUser } = await import("~/lib/server/session.server");
   const { getUserChatSessions } = await import("~/lib/server/ownership.server");
 
-  // Require authentication - redirects to login if not authenticated
   const user = requireUser(session);
-
-  // Load user's chat sessions
   const sessions = await getUserChatSessions(user);
 
   return { user, sessions };
 }
 
+export async function action({ request }: Route.ActionArgs) {
+  const session = await getSession(request.headers.get("Cookie"));
+  const { requireUser, updateSessionTitle, deleteChatSession } = await import("~/lib/server/index.server");
+
+  const user = requireUser(session);
+  const formData = await request.formData();
+  const intent = formData.get("intent");
+  const sessionId = formData.get("sessionId");
+  const title = formData.get("title");
+  const returnToValue = formData.get("returnTo");
+  const isActiveValue = formData.get("isActive");
+  const returnTo = typeof returnToValue === "string" && returnToValue.startsWith("/chat")
+    ? returnToValue
+    : "/chat";
+
+  if (typeof sessionId !== "string" || sessionId.trim() === "") {
+    throw new Response("Session ID required", { status: 400 });
+  }
+
+  if (intent === "rename") {
+    await updateSessionTitle(user, sessionId, typeof title === "string" ? title : "");
+    return redirect(returnTo);
+  }
+
+  if (intent === "delete") {
+    await deleteChatSession(user, sessionId);
+    return redirect(isActiveValue === "true" ? "/chat" : returnTo);
+  }
+
+  throw new Response("Unsupported action", { status: 400 });
+}
+
+function getSessionGroupLabel(value: Date | string) {
+  const date = new Date(value);
+  const sessionDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const diffDays = Math.round((todayStart.getTime() - sessionDay.getTime()) / 86400000);
+
+  if (diffDays === 0) {
+    return "今天";
+  }
+
+  if (diffDays === 1) {
+    return "昨天";
+  }
+
+  return date.toLocaleDateString([], {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+function formatSessionTitle(title: string) {
+  const plainTitle = title
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u200D\uFE0F]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return plainTitle || "New Chat";
+}
+
 export default function ChatLayout() {
   const { user, sessions } = useLoaderData<typeof loader>();
+  const location = useLocation();
+  const submit = useSubmit();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [openMenuSessionId, setOpenMenuSessionId] = useState<string | null>(null);
 
-  // Handle responsive detection
   useEffect(() => {
     const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
-      if (window.innerWidth >= 768) {
+      setIsMobile(window.innerWidth < 960);
+      if (window.innerWidth >= 960) {
         setIsMobileMenuOpen(false);
       }
     };
 
     checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
+    window.addEventListener("resize", checkMobile);
+    return () => window.removeEventListener("resize", checkMobile);
   }, []);
 
-  // Close mobile menu when clicking outside
   useEffect(() => {
-    if (isMobileMenuOpen) {
-      const handleClickOutside = (e: MouseEvent) => {
-        const target = e.target as HTMLElement;
-        if (!target.closest('[data-sidebar]') && !target.closest('[data-menu-button]')) {
-          setIsMobileMenuOpen(false);
-        }
-      };
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
+    if (!isMobileMenuOpen) {
+      return;
     }
+
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest("[data-sidebar]") && !target.closest("[data-menu-button]")) {
+        setIsMobileMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isMobileMenuOpen]);
 
+  useEffect(() => {
+    if (!openMenuSessionId) {
+      return;
+    }
+
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest("[data-session-menu-root]")) {
+        setOpenMenuSessionId(null);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenMenuSessionId(null);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [openMenuSessionId]);
+
+  useEffect(() => {
+    setOpenMenuSessionId(null);
+  }, [location.pathname]);
+
+  const sessionGroups = useMemo(() => {
+    const groups = new Map<string, typeof sessions>();
+
+    sessions.forEach((session) => {
+      const label = getSessionGroupLabel(session.updatedAt);
+      const current = groups.get(label) ?? [];
+      current.push(session);
+      groups.set(label, current);
+    });
+
+    return Array.from(groups.entries()).map(([label, items]) => ({ label, items }));
+  }, [sessions]);
+
+  const submitSessionAction = ({
+    intent,
+    sessionId,
+    title,
+    isActive,
+  }: {
+    intent: "rename" | "delete";
+    sessionId: string;
+    title?: string;
+    isActive: boolean;
+  }) => {
+    const formData = new FormData();
+    formData.set("intent", intent);
+    formData.set("sessionId", sessionId);
+    formData.set("returnTo", location.pathname);
+    formData.set("isActive", String(isActive));
+
+    if (title !== undefined) {
+      formData.set("title", title);
+    }
+
+    submit(formData, { method: "post", action: "/chat" });
+  };
+
+  const handleRenameSession = (
+    event: React.MouseEvent<HTMLButtonElement>,
+    sessionId: string,
+    title: string,
+    isActive: boolean
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const nextTitle = window.prompt("输入新的会话标题", formatSessionTitle(title));
+    if (nextTitle === null) {
+      return;
+    }
+
+    submitSessionAction({
+      intent: "rename",
+      sessionId,
+      title: nextTitle,
+      isActive,
+    });
+  };
+
+  const handleDeleteSession = (
+    event: React.MouseEvent<HTMLButtonElement>,
+    sessionId: string,
+    title: string,
+    isActive: boolean
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const confirmed = window.confirm(`删除会话“${formatSessionTitle(title)}”后将无法恢复，确认删除吗？`);
+    if (!confirmed) {
+      return;
+    }
+
+    submitSessionAction({
+      intent: "delete",
+      sessionId,
+      isActive,
+    });
+  };
+
   return (
-    <div className="h-screen flex overflow-hidden bg-white dark:bg-gray-950">
-      {/* Mobile menu overlay */}
+    <div className="chat-shell relative flex h-screen overflow-hidden bg-[var(--color-background)] text-[var(--chat-ink)]">
+
       {isMobile && isMobileMenuOpen && (
-        <div
-          className="fixed inset-0 bg-black/50 z-40 animate-fade-in"
+        <button
+          type="button"
+          aria-label="Close session list"
+          className="absolute inset-0 z-40 bg-black/20"
           onClick={() => setIsMobileMenuOpen(false)}
         />
       )}
 
-      {/* Sidebar - ChatGPT style dark sidebar */}
       <aside
         data-sidebar
-        className={`
-          fixed md:static inset-y-0 left-0 z-50
-          w-72 md:w-72
-          bg-gray-900 text-gray-100
-          flex flex-col
-          transform transition-transform duration-300 ease-in-out
-          ${isMobile ? (isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full') : 'translate-x-0'}
-        `}
+        className={[
+          "chat-panel safe-top safe-bottom absolute inset-y-0 left-0 z-50 flex w-[260px] flex-col overflow-hidden bg-white",
+          "transition-all duration-200 ease-out lg:static lg:inset-auto lg:h-screen lg:translate-x-0",
+          isMobile ? (isMobileMenuOpen ? "translate-x-0" : "-translate-x-full") : "translate-x-0",
+        ].join(" ")}
       >
-        {/* Sidebar header */}
-        <div className="p-3 flex items-center justify-between border-b border-gray-800">
-          <Link to="/" className="flex items-center gap-2 px-2">
-            <div className="w-8 h-8 bg-white text-gray-900 rounded-lg flex items-center justify-center font-bold text-sm">
-              O
-            </div>
-            <span className="font-semibold text-gray-100">OWU</span>
-          </Link>
-          {isMobile && (
-            <button
-              onClick={() => setIsMobileMenuOpen(false)}
-              className="p-1.5 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-gray-100"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          )}
-        </div>
+        <div className="border-b border-[var(--chat-line)] px-4 pb-4 pt-5">
+          <div className="relative flex items-center justify-between">
+            <Link to="/chat" className="min-w-0" onClick={() => setIsMobileMenuOpen(false)}>
+              <div className="pl-2 text-lg font-semibold text-[var(--chat-ink)]">
+                OWU
+              </div>
+            </Link>
+            {isMobile && (
+              <button
+                type="button"
+                className="rounded-lg p-2 text-[var(--chat-muted)] hover:bg-gray-100"
+                onClick={() => setIsMobileMenuOpen(false)}
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
 
-        {/* New chat button */}
-        <div className="p-3">
           <Link
             to="/chat"
-            onClick={() => isMobile && setIsMobileMenuOpen(false)}
-            className="w-full border border-gray-700 hover:border-gray-600 text-gray-100 py-2.5 px-4 rounded-lg transition-all flex items-center gap-3 text-sm"
+            onClick={() => setIsMobileMenuOpen(false)}
+            className="mt-4 flex items-center gap-2 rounded-lg bg-[var(--chat-ink)] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-800"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 4v16m8-8H4" />
             </svg>
-            New chat
+            New Chat
           </Link>
         </div>
 
-        {/* Chat history */}
-        <div className="flex-1 overflow-y-auto px-3">
-          <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2 px-2 mt-2">
-            Recent
-          </div>
+        <div className="flex-1 overflow-y-auto px-3 py-2">
           {sessions.length === 0 ? (
-            <div className="text-center py-8 px-2">
-              <div className="w-8 h-8 bg-gray-800 rounded-lg flex items-center justify-center mx-auto mb-3">
-                <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                </svg>
-              </div>
-              <p className="text-sm text-gray-500">
-                No conversations yet
-              </p>
+            <div className="mx-1 rounded-lg border border-dashed border-[var(--chat-line)] px-4 py-6 text-center">
+              <p className="text-sm text-[var(--chat-muted)]">No chats yet</p>
             </div>
           ) : (
-            <div className="space-y-0.5">
-              {sessions.map((session) => (
-                <Link
-                  key={session.id}
-                  to={`/chat/${session.id}`}
-                  onClick={() => isMobile && setIsMobileMenuOpen(false)}
-                  className="block px-3 py-2.5 rounded-lg hover:bg-gray-800 text-sm transition-colors group text-gray-300 hover:text-gray-100"
-                  title={session.title}
-                >
-                  <div className="flex items-start gap-3">
-                    <svg className="w-4 h-4 text-gray-500 mt-0.5 flex-shrink-0 group-hover:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-                    </svg>
-                    <span className="truncate flex-1 text-left">{session.title}</span>
+            <div className="space-y-4">
+              {sessionGroups.map((group) => (
+                <section key={group.label}>
+                  <div className="px-3 pb-1.5 text-xs font-medium text-[var(--chat-muted)]">
+                    {group.label}
                   </div>
-                </Link>
+                  <div className="space-y-1">
+                    {group.items.map((session) => {
+                      const isMenuOpen = openMenuSessionId === session.id;
+                      const isCurrentSession = location.pathname === `/chat/${session.id}`;
+
+                      return (
+                        <div key={session.id} data-session-menu-root className="group/session relative">
+                          <NavLink
+                            to={`/chat/${session.id}`}
+                            onClick={() => {
+                              setOpenMenuSessionId(null);
+                              setIsMobileMenuOpen(false);
+                            }}
+                            className={({ isActive }) =>
+                              [
+                                "group relative block rounded-md px-3 py-2 pr-8 text-sm",
+                                "transition-colors",
+                                isActive
+                                  ? "bg-gray-100 text-[var(--chat-ink)]"
+                                  : "text-[var(--chat-muted)] hover:bg-gray-50 hover:text-[var(--chat-ink)]",
+                              ].join(" ")
+                            }
+                          >
+                            <div className="truncate">
+                              {formatSessionTitle(session.title)}
+                            </div>
+                          </NavLink>
+
+                          <button
+                            type="button"
+                            aria-label="Session options"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              setOpenMenuSessionId((current) => current === session.id ? null : session.id);
+                            }}
+                            className={[
+                              "absolute right-1 top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded",
+                              "text-[var(--chat-muted)] transition-opacity",
+                              "hover:bg-gray-200 hover:text-[var(--chat-ink)]",
+                              isMenuOpen
+                                ? "bg-gray-200 text-[var(--chat-ink)] opacity-100"
+                                : "opacity-0 group-hover/session:opacity-100",
+                            ].join(" ")}
+                          >
+                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 6h.01M12 12h.01M12 18h.01" />
+                            </svg>
+                          </button>
+
+                          {isMenuOpen && (
+                            <div className="absolute right-1 top-[calc(50%+0.75rem)] z-20 min-w-[140px] overflow-hidden rounded-md border border-[var(--chat-line)] bg-white p-1 shadow-lg animate-fade-in">
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  setOpenMenuSessionId(null);
+                                  handleRenameSession(event, session.id, session.title, isCurrentSession);
+                                }}
+                                className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-sm text-[var(--chat-ink)] hover:bg-gray-100"
+                              >
+                                <svg className="h-4 w-4 text-[var(--chat-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 20h4l10.5-10.5a2.12 2.12 0 1 0-3-3L5 17v3Z" />
+                                </svg>
+                                Rename
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  setOpenMenuSessionId(null);
+                                  handleDeleteSession(event, session.id, session.title, isCurrentSession);
+                                }}
+                                className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                              >
+                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 7h16m-10 4v6m4-6v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                                </svg>
+                                Delete
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
               ))}
             </div>
           )}
         </div>
 
-        {/* User section */}
-        <div className="p-3 border-t border-gray-800">
-          {/* Admin link - only for admins */}
-          {user.role === 'admin' && (
-            <Link
-              to="/admin"
-              className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-gray-300 hover:bg-gray-800 hover:text-gray-100 transition-colors mb-1"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              Settings
-            </Link>
-          )}
-
-          {/* Back to home */}
-          <Link
-            to="/"
-            className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-gray-300 hover:bg-gray-800 hover:text-gray-100 transition-colors mb-1"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-            </svg>
-            Home
-          </Link>
-
-          {/* User info and logout */}
-          <div className="pt-2 border-t border-gray-800 mt-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 px-2">
-                <div className="w-7 h-7 rounded-full bg-green-600 flex items-center justify-center text-white text-xs font-medium">
-                  {user.username.charAt(0).toUpperCase()}
-                </div>
-                <span className="text-sm text-gray-300 truncate max-w-[120px]">{user.username}</span>
-              </div>
-              <Form method="post" action="/logout">
-                <button
-                  type="submit"
-                  className="p-2 rounded-lg text-gray-400 hover:text-gray-100 hover:bg-gray-800 transition-colors"
-                  title="Log out"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                  </svg>
-                </button>
-              </Form>
+        <div className="border-t border-[var(--chat-line)] px-3 py-3">
+          <div className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-gray-50">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-200 text-sm font-semibold text-gray-700">
+              {user.username.charAt(0).toUpperCase()}
             </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium text-[var(--chat-ink)]">{user.username}</div>
+              <div className="text-xs text-[var(--chat-muted)]">
+                {user.role}
+              </div>
+            </div>
+            <Form method="post" action="/logout">
+              <button
+                type="submit"
+                className="rounded p-1.5 text-[var(--chat-muted)] transition-colors hover:bg-gray-200 hover:text-[var(--chat-ink)]"
+                title="Log out"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17 16l4-4m0 0-4-4m4 4H7m6 4v1a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h4a3 3 0 0 1 3 3v1" />
+                </svg>
+              </button>
+            </Form>
           </div>
         </div>
       </aside>
 
-      {/* Main content */}
-      <main className="flex-1 flex flex-col min-w-0 bg-white dark:bg-gray-950">
-        {/* Mobile header */}
-        {isMobile && (
-          <header className="h-14 border-b border-gray-200 dark:border-gray-800 flex items-center px-4 bg-white dark:bg-gray-950">
+      <main className="relative flex min-w-0 flex-1 flex-col bg-white">
+        <div className="flex h-full min-h-0 flex-col">
+          <header className="flex h-14 items-center border-b border-[var(--chat-line)] px-4 lg:hidden">
             <button
+              type="button"
               data-menu-button
               onClick={() => setIsMobileMenuOpen(true)}
-              className="p-2 -ml-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+              className="rounded-lg p-2 text-[var(--chat-muted)] hover:bg-gray-100"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 7h16M4 12h16M4 17h16" />
               </svg>
             </button>
-            <span className="ml-3 font-semibold">OWU Chat</span>
+            <div className="ml-3 min-w-0">
+              <div className="font-medium text-[var(--chat-ink)]">OWU</div>
+            </div>
           </header>
-        )}
-        <Outlet />
+          <Outlet />
+        </div>
       </main>
     </div>
   );

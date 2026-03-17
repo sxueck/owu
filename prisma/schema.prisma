@@ -5,6 +5,7 @@ generator client {
 datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 // User model for authentication and RBAC
@@ -64,6 +65,7 @@ model ChatMessage {
   id        String       @id @default(cuid())
   sessionId String       @map("session_id")
   role      MessageRole
+  model     String?
   content   String       @db.LongText
   createdAt DateTime     @default(now()) @map("created_at")
 

@@ -155,6 +155,7 @@ Required variables (see `.env.example`):
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DATABASE_URL` | MySQL connection string | `mysql://user:pass@localhost:3306/owu` |
+| `SHADOW_DATABASE_URL` | Dedicated Prisma shadow database for `migrate dev` | `mysql://user:pass@localhost:3306/owu_shadow` |
 | `SESSION_SECRET` | Secret for signing cookies | Generate a random string |
 | `APP_PORT` | Server port | `3000` |
 | `NODE_ENV` | Environment | `development` |
@@ -163,6 +164,9 @@ Required variables (see `.env.example`):
 
 ### Database connection errors
 Ensure MySQL is running: `docker-compose ps`
+
+### `P3014` / shadow database permission errors
+This project uses a dedicated `SHADOW_DATABASE_URL` so `prisma migrate dev` does not need `CREATE DATABASE` privileges on the application user. If you added this fix after MySQL was already initialized, run the SQL setup once in the running container or recreate the MySQL volume so `docker/mysql/init/01-grant-prisma-shadow.sh` can create the `owu_shadow` database and grants.
 
 ### "No models available" error
 Admin needs to configure allowed models in Admin Settings

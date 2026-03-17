@@ -1,11 +1,12 @@
 import type { Route } from "./+types/settings";
-import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import { Form, useActionData, useFetcher, useLoaderData, useNavigation } from "react-router";
+import { useEffect, useMemo, useState } from "react";
 import { getSession } from "~/sessions";
 
 export function meta({}: Route.MetaArgs) {
   return [
     { title: "System Settings - OWU Admin" },
-    { name: "description", content: "Configure system settings" },
+    { name: "description", content: "Configure provider settings" },
   ];
 }
 
@@ -15,103 +16,193 @@ interface LoaderData {
     hasApiKey: boolean;
     openaiBaseUrl: string | null;
     allowedModels: string[];
+    providers: Array<{
+      id: string;
+      label: string;
+      hasApiKey: boolean;
+      baseUrl: string | null;
+      models: string[];
+    }>;
+    providerCount: number;
+    modelCount: number;
     updatedAt: Date;
     updatedBy: string | null;
   } | null;
   isConfigured: boolean;
 }
 
-function formatModelsForDisplay(models: string[]): string {
-  return models.join("\n");
-}
+type PublicProvider = NonNullable<LoaderData["config"]>["providers"][number];
 
-/**
- * Loader: Get current configuration (public-safe, no API keys)
- */
-export async function loader({ request }: Route.LoaderArgs): Promise<LoaderData> {
-  const session = await getSession(request.headers.get("Cookie"));
-  const { requireAdmin } = await import("~/lib/server/session.server");
-  const { getPublicConfig, isOpenAIConfigured } = await import("~/lib/server/index.server");
-  requireAdmin(session);
-
-  const [config, configured] = await Promise.all([
-    getPublicConfig(),
-    isOpenAIConfigured(),
-  ]);
-
-  return { config, isConfigured: configured };
+interface ProviderFormValue {
+  id: string;
+  label: string;
+  apiKey: string;
+  baseUrl: string;
+  models: string[];
+  hasStoredApiKey: boolean;
 }
 
 interface ActionData {
   success?: boolean;
   errors?: Record<string, string>;
   values?: {
-    openaiApiKey?: string;
-    openaiBaseUrl?: string;
-    allowedModels?: string;
+    providers: ProviderFormValue[];
   };
 }
 
-/**
- * Action: Save system configuration
- */
+type ModelSyncResult = { success: boolean; models?: string[]; error?: string };
+
+function createProviderId(): string {
+  return `provider-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createEmptyProvider(index = 0): ProviderFormValue {
+  return {
+    id: createProviderId(),
+    label: `Provider ${index + 1}`,
+    apiKey: "",
+    baseUrl: "",
+    models: [],
+    hasStoredApiKey: false,
+  };
+}
+
+function toProviderFormValue(provider: PublicProvider): ProviderFormValue {
+  return {
+    id: provider.id,
+    label: provider.label,
+    apiKey: "",
+    baseUrl: provider.baseUrl ?? "",
+    models: provider.models,
+    hasStoredApiKey: provider.hasApiKey,
+  };
+}
+
+function getDefaultProviders(config: LoaderData["config"] | null): ProviderFormValue[] {
+  if (config?.providers.length) {
+    return config.providers.map((provider) => toProviderFormValue(provider));
+  }
+
+  return [createEmptyProvider(0)];
+}
+
+function formatTimestamp(value: Date | string | null | undefined): string {
+  if (!value) {
+    return "Not saved yet";
+  }
+
+  return new Date(value).toLocaleString();
+}
+
+function buildProvidersPayload(providers: ProviderFormValue[]) {
+  return JSON.stringify(
+    providers.map((provider) => ({
+      id: provider.id,
+      label: provider.label,
+      apiKey: provider.apiKey,
+      baseUrl: provider.baseUrl,
+      models: provider.models,
+      retainStoredApiKey: provider.hasStoredApiKey && provider.apiKey.trim() === "",
+    })),
+  );
+}
+
+export async function loader({ request }: Route.LoaderArgs): Promise<LoaderData> {
+  const session = await getSession(request.headers.get("Cookie"));
+  const { requireAdmin } = await import("~/lib/server/session.server");
+  const { getPublicConfig, isOpenAIConfigured } = await import("~/lib/server/index.server");
+  requireAdmin(session);
+
+  const [config, configured] = await Promise.all([getPublicConfig(), isOpenAIConfigured()]);
+
+  return { config, isConfigured: configured };
+}
+
 export async function action({ request }: Route.ActionArgs): Promise<ActionData> {
   const session = await getSession(request.headers.get("Cookie"));
   const { requireAdmin } = await import("~/lib/server/session.server");
-  const { saveSystemConfig, parseModelsInput } = await import("~/lib/server/index.server");
+  const { getSystemConfig, normalizeProviderDrafts, saveSystemConfig } = await import("~/lib/server/index.server");
   const admin = requireAdmin(session);
 
   const formData = await request.formData();
+  const providersPayload = formData.get("providersPayload");
 
-  const openaiApiKey = formData.get("openaiApiKey") as string;
-  const openaiBaseUrl = formData.get("openaiBaseUrl") as string;
-  const allowedModelsInput = formData.get("allowedModels") as string;
-
-  // Validation
-  const errors: Record<string, string> = {};
-
-  // API Key must be explicitly provided and non-empty
-  const trimmedApiKey = openaiApiKey?.trim();
-  if (!trimmedApiKey) {
-    errors.openaiApiKey = "API Key is required and must be non-empty";
-  }
-
-  // Parse and validate models
-  const allowedModels = parseModelsInput(allowedModelsInput);
-  if (allowedModels.length === 0) {
-    errors.allowedModels = "At least one model is required";
-  }
-
-  if (Object.keys(errors).length > 0) {
+  if (typeof providersPayload !== "string" || !providersPayload.trim()) {
     return {
-      errors,
-      values: {
-        openaiApiKey: openaiApiKey || "",
-        openaiBaseUrl: openaiBaseUrl || "",
-        allowedModels: allowedModelsInput || "",
-      },
+      errors: { general: "Provider payload is required." },
+      values: { providers: [createEmptyProvider(0)] },
     };
   }
 
+  let rawProviders: Array<{
+    id?: string;
+    label?: string;
+    apiKey?: string;
+    baseUrl?: string | null;
+    models?: string[];
+    retainStoredApiKey?: boolean;
+  }> = [];
+
   try {
-    // Save configuration - API Key must be explicitly provided (enforced by validation above)
+    const parsed = JSON.parse(providersPayload) as unknown;
+    if (!Array.isArray(parsed)) {
+      throw new Error("Providers payload must be an array.");
+    }
+
+    rawProviders = parsed as typeof rawProviders;
+  } catch (error) {
+    return {
+      errors: { general: error instanceof Error ? error.message : "Invalid provider payload." },
+      values: { providers: [createEmptyProvider(0)] },
+    };
+  }
+
+  const currentConfig = await getSystemConfig();
+  const providers = normalizeProviderDrafts(rawProviders, currentConfig?.providers ?? []);
+  const values: ProviderFormValue[] = rawProviders.map((provider, index) => ({
+    id: provider.id?.trim() || createProviderId(),
+    label: provider.label?.trim() || `Provider ${index + 1}`,
+    apiKey: provider.apiKey?.trim() || "",
+    baseUrl: provider.baseUrl?.trim() || "",
+    models: Array.isArray(provider.models) ? provider.models : [],
+    hasStoredApiKey: Boolean(provider.retainStoredApiKey),
+  }));
+
+  const errors: Record<string, string> = {};
+
+  if (providers.length === 0) {
+    errors.providers = "Add at least one provider before saving.";
+  }
+
+  for (const provider of providers) {
+    if (!provider.apiKey) {
+      errors.providers = `Provider \"${provider.label}\" needs an API key.`;
+      break;
+    }
+
+    if (provider.models.length === 0) {
+      errors.providers = `Provider \"${provider.label}\" has no synced models. Use Sync models first.`;
+      break;
+    }
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return { errors, values: { providers: values } };
+  }
+
+  try {
     await saveSystemConfig({
-      openaiApiKey: trimmedApiKey!,
-      openaiBaseUrl: openaiBaseUrl?.trim() || null,
-      allowedModels,
+      providers,
       updatedBy: admin.userId,
     });
 
     return { success: true };
   } catch (error) {
-    console.error("Failed to save configuration:", error);
     return {
-      errors: { general: "Failed to save configuration. Please try again." },
-      values: {
-        openaiApiKey: openaiApiKey || "",
-        openaiBaseUrl: openaiBaseUrl || "",
-        allowedModels: allowedModelsInput || "",
+      errors: {
+        general: error instanceof Error ? error.message : "Failed to save configuration. Please try again.",
       },
+      values: { providers: values },
     };
   }
 }
@@ -120,239 +211,328 @@ export default function AdminSettingsPage() {
   const { config, isConfigured } = useLoaderData<LoaderData>();
   const actionData = useActionData<ActionData>();
   const navigation = useNavigation();
+  const modelSyncFetcher = useFetcher<ModelSyncResult>();
   const isSubmitting = navigation.state === "submitting";
 
-  // Default form values
-  const defaultValues = {
-    openaiApiKey: actionData?.values?.openaiApiKey ?? "",
-    openaiBaseUrl: actionData?.values?.openaiBaseUrl ?? config?.openaiBaseUrl ?? "",
-    allowedModels: actionData?.values?.allowedModels ?? formatModelsForDisplay(config?.allowedModels ?? []),
-  };
+  const seedProviders = useMemo(
+    () => actionData?.values?.providers ?? getDefaultProviders(config),
+    [actionData?.values?.providers, config],
+  );
+  const providerResetKey = useMemo(() => JSON.stringify(seedProviders), [seedProviders]);
+
+  const [providers, setProviders] = useState<
+    Array<ProviderFormValue & { isFetchingModels: boolean; fetchError: string | null }>
+  >(() => seedProviders.map((provider) => ({ ...provider, isFetchingModels: false, fetchError: null })));
+  const [syncingProviderId, setSyncingProviderId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setProviders(seedProviders.map((provider) => ({ ...provider, isFetchingModels: false, fetchError: null })));
+  }, [providerResetKey, seedProviders]);
+
+  useEffect(() => {
+    if (modelSyncFetcher.state !== "idle" || !syncingProviderId) {
+      return;
+    }
+
+    if (modelSyncFetcher.data?.success && modelSyncFetcher.data.models) {
+      setProviders((current) =>
+        current.map((item) =>
+          item.id === syncingProviderId
+            ? {
+                ...item,
+                models: modelSyncFetcher.data?.models ?? [],
+                isFetchingModels: false,
+                fetchError: null,
+              }
+            : item,
+        ),
+      );
+    } else {
+      setProviders((current) =>
+        current.map((item) =>
+          item.id === syncingProviderId
+            ? {
+                ...item,
+                isFetchingModels: false,
+                fetchError: modelSyncFetcher.data?.error || "Failed to fetch models.",
+              }
+            : item,
+        ),
+      );
+    }
+
+    setSyncingProviderId(null);
+  }, [modelSyncFetcher.data, modelSyncFetcher.state, syncingProviderId]);
+
+  const totalModels = providers.reduce((count, provider) => count + provider.models.length, 0);
+
+  function syncProviderModels(providerId: string) {
+    const provider = providers.find((item) => item.id === providerId);
+    if (!provider) {
+      return;
+    }
+
+    setProviders((current) =>
+      current.map((item) =>
+        item.id === providerId ? { ...item, isFetchingModels: true, fetchError: null } : item,
+      ),
+    );
+
+    setSyncingProviderId(providerId);
+    modelSyncFetcher.submit(
+      {
+        id: provider.id,
+        label: provider.label,
+        apiKey: provider.apiKey,
+        baseUrl: provider.baseUrl,
+        retainStoredApiKey: String(provider.hasStoredApiKey && provider.apiKey.trim() === ""),
+      },
+      { method: "post", action: "/admin/models" },
+    );
+  }
 
   return (
-    <div>
-      {/* Page header */}
-      <div className="mb-8">
-        <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">System Settings</h1>
-        <p className="text-gray-600 dark:text-gray-400 mt-1">
-          Configure your OpenAI API credentials and model settings
-        </p>
-      </div>
-
-      {/* Status Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-        <div className="p-4 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${config?.hasApiKey ? 'bg-green-100 dark:bg-green-900/30' : 'bg-red-100 dark:bg-red-900/30'}`}>
-              <svg className={`w-5 h-5 ${config?.hasApiKey ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-              </svg>
+    <div className="space-y-6 text-[var(--chat-ink)]">
+      <section className="chat-panel relative overflow-hidden rounded-[30px] px-6 py-6 sm:px-8 sm:py-7">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(199,103,58,0.14),transparent_32%),radial-gradient(circle_at_bottom_left,rgba(37,83,70,0.12),transparent_28%)]" />
+        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-2xl">
+            <div className="inline-flex items-center gap-2 rounded-full border border-[var(--chat-line)] bg-white/70 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">
+              <span className="h-2 w-2 rounded-full bg-[var(--chat-accent)]" />
+              Provider Console
             </div>
-            <div>
-              <p className="text-sm font-medium text-gray-900 dark:text-white">API Key</p>
-              <p className={`text-xs ${config?.hasApiKey ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
-                {config?.hasApiKey ? 'Configured' : 'Not configured'}
-              </p>
+            <h1 className="mt-4 font-serif text-3xl tracking-[-0.03em] sm:text-4xl">OpenAI vendor orchestration</h1>
+            <p className="mt-3 max-w-xl text-sm leading-7 text-[var(--chat-muted)] sm:text-base">
+              管理多个 OpenAI-compatible 供应商
+            </p>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3 lg:min-w-[360px]">
+            <div className="chat-panel-strong rounded-[22px] px-4 py-4">
+              <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">Providers</div>
+              <div className="mt-2 text-2xl font-semibold">{providers.length.toString().padStart(2, "0")}</div>
+            </div>
+            <div className="chat-panel-strong rounded-[22px] px-4 py-4">
+              <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">Models</div>
+              <div className="mt-2 text-2xl font-semibold">{totalModels.toString().padStart(2, "0")}</div>
+            </div>
+            <div className="chat-panel-strong rounded-[22px] px-4 py-4">
+              <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">System</div>
+              <div className="mt-2 text-2xl font-semibold">{isConfigured ? "Ready" : "Draft"}</div>
             </div>
           </div>
         </div>
+      </section>
 
-        <div className="p-4 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${(config?.allowedModels.length ?? 0) > 0 ? 'bg-green-100 dark:bg-green-900/30' : 'bg-red-100 dark:bg-red-900/30'}`}>
-              <svg className={`w-5 h-5 ${(config?.allowedModels.length ?? 0) > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-              </svg>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-gray-900 dark:text-white">Models</p>
-              <p className={`text-xs ${(config?.allowedModels.length ?? 0) > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
-                {config?.allowedModels.length ?? 0} configured
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="p-4 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isConfigured ? 'bg-green-100 dark:bg-green-900/30' : 'bg-amber-100 dark:bg-amber-900/30'}`}>
-              <svg className={`w-5 h-5 ${isConfigured ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 13l4 4L19 7" />
-              </svg>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-gray-900 dark:text-white">System Status</p>
-              <p className={`text-xs ${isConfigured ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`}>
-                {isConfigured ? 'Ready' : 'Incomplete'}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Configuration Form */}
-      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6">
-        <div className="mb-6">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">OpenAI Configuration</h2>
-          <p className="text-gray-600 dark:text-gray-400 text-sm mt-1">
-            Your API key is stored securely and never exposed to clients.
-          </p>
-        </div>
-
-        {/* Success Message */}
-        {actionData?.success && (
-          <div className="mb-6 p-4 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
-            <div className="flex items-center gap-2">
-              <svg className="w-5 h-5 text-green-600 dark:text-green-400" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-              </svg>
-              <p className="text-sm font-medium text-green-700 dark:text-green-400">
-                Configuration saved successfully
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* General Error */}
-        {actionData?.errors?.general && (
-          <div className="mb-6 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
-            <div className="flex items-start gap-2">
-              <svg className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-              </svg>
-              <p className="text-sm text-red-700 dark:text-red-400">
-                {actionData.errors.general}
-              </p>
-            </div>
-          </div>
-        )}
-
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
         <Form method="post" className="space-y-6">
-          {/* API Key Field */}
-          <div>
-            <label htmlFor="openaiApiKey" className="block text-sm font-medium mb-2 text-gray-900 dark:text-white">
-              API Key <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
-              <input
-                type="password"
-                id="openaiApiKey"
-                name="openaiApiKey"
-                defaultValue={defaultValues.openaiApiKey}
-                placeholder="sk-..."
-                className={`w-full px-4 py-2.5 rounded-lg border bg-gray-50 dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-white transition-all ${
-                  actionData?.errors?.openaiApiKey
-                    ? 'border-red-500 focus:border-red-500'
-                    : 'border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600'
-                }`}
-                autoComplete="off"
-              />
-              {config?.hasApiKey && (
-                <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                  <span className="text-xs text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-1 rounded-full">
-                    Configured
-                  </span>
-                </div>
-              )}
+          <input type="hidden" name="providersPayload" value={buildProvidersPayload(providers)} />
+
+          {actionData?.success && (
+            <div className="rounded-[24px] border border-[rgba(37,83,70,0.2)] bg-[rgba(37,83,70,0.1)] px-5 py-4 text-sm text-[var(--chat-ink)]">
+              Configuration saved successfully.
             </div>
-            {actionData?.errors?.openaiApiKey && (
-              <p className="mt-2 text-sm text-red-600 dark:text-red-400">
-                {actionData.errors.openaiApiKey}
-              </p>
-            )}
-            <p className="mt-2 text-xs text-gray-500">
-              Enter your OpenAI API key. Must be non-empty to save.
-            </p>
-          </div>
+          )}
 
-          {/* Base URL Field */}
-          <div>
-            <label htmlFor="openaiBaseUrl" className="block text-sm font-medium mb-2 text-gray-900 dark:text-white">
-              Base URL <span className="text-gray-400 font-normal">(optional)</span>
-            </label>
-            <input
-              type="url"
-              id="openaiBaseUrl"
-              name="openaiBaseUrl"
-              defaultValue={defaultValues.openaiBaseUrl}
-              placeholder="https://api.openai.com/v1"
-              className="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-white transition-all hover:border-gray-400 dark:hover:border-gray-600"
-            />
-            <p className="mt-2 text-xs text-gray-500">
-              Leave empty to use the official OpenAI API endpoint.
-            </p>
-          </div>
+          {(actionData?.errors?.general || actionData?.errors?.providers) && (
+            <div className="rounded-[24px] border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">
+              {actionData.errors?.general ?? actionData.errors?.providers}
+            </div>
+          )}
 
-          {/* Allowed Models Field */}
-          <div>
-            <label htmlFor="allowedModels" className="block text-sm font-medium mb-2 text-gray-900 dark:text-white">
-              Allowed Models <span className="text-red-500">*</span>
-            </label>
-            <textarea
-              id="allowedModels"
-              name="allowedModels"
-              rows={6}
-              defaultValue={defaultValues.allowedModels}
-              placeholder="gpt-4o-mini&#10;gpt-4o&#10;gpt-4-turbo"
-              className={`w-full px-4 py-2.5 rounded-lg border bg-gray-50 dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-white font-mono text-sm transition-all ${
-                actionData?.errors?.allowedModels
-                  ? 'border-red-500 focus:border-red-500'
-                  : 'border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600'
-              }`}
-            />
-            {actionData?.errors?.allowedModels && (
-              <p className="mt-2 text-sm text-red-600 dark:text-red-400">
-                {actionData.errors.allowedModels}
-              </p>
-            )}
-            <p className="mt-2 text-xs text-gray-500">
-              One model per line. Only these models will be available to users.
-            </p>
-          </div>
+          <section className="chat-panel rounded-[30px] px-5 py-5 sm:px-6 sm:py-6">
+            <div className="flex flex-col gap-4 border-b border-[var(--chat-line)] pb-5 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="font-serif text-2xl tracking-[-0.02em]">Provider stack</h2>
+                <p className="mt-2 text-sm leading-6 text-[var(--chat-muted)]">
+                  每个供应商都维护自己的 API key、Base URL 和同步后的模型列表。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setProviders((current) => [
+                    ...current,
+                    { ...createEmptyProvider(current.length), isFetchingModels: false, fetchError: null },
+                  ])
+                }
+                className="inline-flex items-center justify-center rounded-full border border-[var(--chat-line)] bg-white/80 px-4 py-2 text-sm font-medium text-[var(--chat-ink)] hover:bg-white"
+              >
+                Add provider
+              </button>
+            </div>
 
-          {/* Model Suggestions */}
-          <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
-            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Common models</p>
-            <div className="flex flex-wrap gap-2">
-              {['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'].map((model) => (
-                <code key={model} className="text-xs bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 px-2 py-1 rounded border border-gray-200 dark:border-gray-600">
-                  {model}
-                </code>
+            <div className="mt-6 space-y-5">
+              {providers.map((provider, index) => (
+                <article key={provider.id} className="chat-panel-strong rounded-[28px] px-4 py-4 sm:px-5 sm:py-5">
+                  <div className="flex flex-col gap-4 border-b border-[var(--chat-line)] pb-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">Provider {index + 1}</div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--chat-muted)]">
+                        {provider.hasStoredApiKey && (
+                          <span className="rounded-full bg-[var(--chat-forest-soft)] px-3 py-1 text-[var(--chat-forest)]">
+                            Stored key
+                          </span>
+                        )}
+                        <span>{provider.models.length} synced models</span>
+                      </div>
+                    </div>
+
+                    {providers.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setProviders((current) => current.filter((item) => item.id !== provider.id))}
+                        className="rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-sm text-red-600 hover:bg-red-100"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="mt-5 grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-[var(--chat-ink)]">Vendor name</label>
+                      <input
+                        type="text"
+                        value={provider.label}
+                        onChange={(event) =>
+                          setProviders((current) =>
+                            current.map((item) =>
+                              item.id === provider.id ? { ...item, label: event.target.value } : item,
+                            ),
+                          )
+                        }
+                        className="w-full rounded-[18px] border border-[var(--chat-line)] bg-white/88 px-4 py-3 text-sm outline-none focus:border-[var(--chat-accent)]"
+                        placeholder="OpenAI / OneAPI / Azure Proxy"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-[var(--chat-ink)]">API key</label>
+                      <input
+                        type="password"
+                        value={provider.apiKey}
+                        onChange={(event) =>
+                          setProviders((current) =>
+                            current.map((item) =>
+                              item.id === provider.id ? { ...item, apiKey: event.target.value } : item,
+                            ),
+                          )
+                        }
+                        className="w-full rounded-[18px] border border-[var(--chat-line)] bg-white/88 px-4 py-3 text-sm outline-none focus:border-[var(--chat-accent)]"
+                        placeholder={provider.hasStoredApiKey ? "Leave blank to keep current key" : "sk-..."}
+                        autoComplete="off"
+                      />
+                    </div>
+
+                    <div className="space-y-2 md:col-span-2">
+                      <label className="text-sm font-medium text-[var(--chat-ink)]">Base URL</label>
+                      <input
+                        type="url"
+                        value={provider.baseUrl}
+                        onChange={(event) =>
+                          setProviders((current) =>
+                            current.map((item) =>
+                              item.id === provider.id ? { ...item, baseUrl: event.target.value } : item,
+                            ),
+                          )
+                        }
+                        className="w-full rounded-[18px] border border-[var(--chat-line)] bg-white/88 px-4 py-3 text-sm outline-none focus:border-[var(--chat-accent)]"
+                        placeholder="https://api.openai.com/v1"
+                      />
+                      <p className="text-xs leading-5 text-[var(--chat-muted)]">
+                        支持填写根路径或 `/v1` 路径，模型同步会优先请求 `/v1/models`。
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-5 rounded-[24px] border border-[var(--chat-line)] bg-white/72 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <div className="text-sm font-medium text-[var(--chat-ink)]">Model catalog</div>
+                        <p className="mt-1 text-xs leading-5 text-[var(--chat-muted)]">
+                          通过服务端代理同步模型，避免手动维护白名单。
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => syncProviderModels(provider.id)}
+                        disabled={provider.isFetchingModels}
+                        className="inline-flex items-center justify-center rounded-full bg-[var(--chat-forest)] px-4 py-2 text-sm font-medium text-white hover:bg-[#1f463b] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {provider.isFetchingModels ? "Syncing..." : "Sync models"}
+                      </button>
+                    </div>
+
+                    {provider.fetchError && (
+                      <div className="mt-4 rounded-[18px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                        {provider.fetchError}
+                      </div>
+                    )}
+
+                    {provider.models.length > 0 ? (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {provider.models.map((model) => (
+                          <span
+                            key={`${provider.id}-${model}`}
+                            className="rounded-full border border-[var(--chat-line)] bg-[rgba(199,103,58,0.08)] px-3 py-1.5 text-xs text-[var(--chat-ink)]"
+                          >
+                            {model}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-4 rounded-[18px] border border-dashed border-[var(--chat-line)] bg-[rgba(255,255,255,0.6)] px-4 py-4 text-sm text-[var(--chat-muted)]">
+                        No models synced yet.
+                      </div>
+                    )}
+                  </div>
+                </article>
               ))}
             </div>
-          </div>
 
-          {/* Submit Button */}
-          <div className="pt-4 flex items-center gap-4 border-t border-gray-200 dark:border-gray-800">
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="bg-gray-900 dark:bg-white text-white dark:text-gray-900 px-5 py-2.5 rounded-lg font-medium hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
-            >
-              {isSubmitting ? (
-                <>
-                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                  Save Settings
-                </>
-              )}
-            </button>
-            {config?.updatedAt && (
-              <span className="text-sm text-gray-500">
-                Last updated: {new Date(config.updatedAt).toLocaleString()}
-              </span>
-            )}
-          </div>
+            <div className="mt-6 flex flex-col gap-3 border-t border-[var(--chat-line)] pt-5 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-[var(--chat-muted)]">保存时会把当前供应商列表写入系统配置，并立即影响 `/chat` 的模型选择。</p>
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="inline-flex items-center justify-center rounded-full bg-[var(--chat-accent)] px-5 py-2.5 text-sm font-medium text-white hover:bg-[#b95b30] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSubmitting ? "Saving..." : "Save settings"}
+              </button>
+            </div>
+          </section>
         </Form>
+
+        <aside className="space-y-6">
+          <section className="chat-panel rounded-[30px] px-5 py-5 sm:px-6">
+            <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">Runtime</div>
+            <div className="mt-4 space-y-4 text-sm text-[var(--chat-ink)]">
+              <div>
+                <div className="text-[var(--chat-muted)]">Status</div>
+                <div className="mt-1 font-medium">{isConfigured ? "Ready for chat" : "Incomplete setup"}</div>
+              </div>
+              <div>
+                <div className="text-[var(--chat-muted)]">Last updated</div>
+                <div className="mt-1 font-medium">{formatTimestamp(config?.updatedAt)}</div>
+              </div>
+              <div>
+                <div className="text-[var(--chat-muted)]">Tracked models</div>
+                <div className="mt-1 font-medium">{totalModels}</div>
+              </div>
+            </div>
+          </section>
+
+          <section className="chat-panel rounded-[30px] px-5 py-5 sm:px-6">
+            <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">Flow</div>
+            <div className="mt-4 space-y-3 text-sm leading-6 text-[var(--chat-muted)]">
+              <p>1. 填写供应商名称、API key 和 Base URL。</p>
+              <p>2. 点击 `Sync models` 从服务端拉取模型列表。</p>
+              <p>3. 保存后，`/chat` 会立即展示所有已同步的模型。</p>
+            </div>
+          </section>
+        </aside>
       </div>
     </div>
   );
