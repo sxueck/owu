@@ -29,6 +29,19 @@ export const links: Route.LinksFunction = () => [
   },
 ];
 
+const themeInitScript = `
+  (function() {
+    const key = "owu-theme";
+    let theme = localStorage.getItem(key);
+    if (!theme || (theme !== "light" && theme !== "dark")) {
+      theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+    if (theme === "dark") {
+      document.documentElement.setAttribute("data-theme", "dark");
+    }
+  })();
+`;
+
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
@@ -37,6 +50,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body>
         {children}

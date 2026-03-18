@@ -90,6 +90,17 @@ export {
   canModifySystemConfig,
 } from './ownership.server';
 
+// Code Bookmarks
+export {
+  getUserBookmarks,
+  createBookmark,
+  deleteBookmark,
+} from './bookmark.server';
+export type {
+  UserCodeBookmark,
+  CreateBookmarkInput,
+} from './bookmark.server';
+
 // Chat Service
 export {
   createChatSession,

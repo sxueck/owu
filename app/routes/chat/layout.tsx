@@ -1,5 +1,5 @@
 import type { Route } from "./+types/layout";
-import { Form, Link, NavLink, Outlet, redirect, useLoaderData, useLocation, useSubmit } from "react-router";
+import { Form, Link, NavLink, Outlet, redirect, useLoaderData, useLocation, useRevalidator, useSubmit } from "react-router";
 import { getSession } from "~/sessions";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "~/components/ThemeProvider";
@@ -21,13 +21,17 @@ export async function loader({ request }: Route.LoaderArgs) {
   const session = await getSession(request.headers.get("Cookie"));
   const { requireUser } = await import("~/lib/server/session.server");
   const { getUserChatSessions } = await import("~/lib/server/ownership.server");
+  const { getUserBookmarks } = await import("~/lib/server/bookmark.server");
 
   const user = requireUser(session);
-  const sessions = await getUserChatSessions(user);
+  const [sessions, bookmarks] = await Promise.all([
+    getUserChatSessions(user),
+    getUserBookmarks(user),
+  ]);
   const version = process.env.APP_VERSION ?? "dev";
   const buildTime = process.env.APP_BUILD_TIME ?? new Date().toISOString();
 
-  return { user, sessions, version, buildTime };
+  return { user, sessions, bookmarks, version, buildTime };
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -93,16 +97,33 @@ function formatSessionTitle(title: string) {
   return plainTitle || "New Chat";
 }
 
+function formatBookmarkTitle(title: string) {
+  const normalized = title.replace(/\s+/g, " ").trim();
+  return normalized.length > 0 ? normalized : "Untitled snippet";
+}
+
+function formatBookmarkPreview(codePreview: string) {
+  const normalized = codePreview.replace(/\s+/g, " ").trim();
+  if (normalized.length === 0) {
+    return "(empty code block)";
+  }
+
+  return normalized.length > 30 ? `${normalized.slice(0, 30)}...` : normalized;
+}
+
 export default function ChatLayout() {
-  const { user, sessions, version, buildTime } = useLoaderData<typeof loader>();
+  const { user, sessions, bookmarks, version, buildTime } = useLoaderData<typeof loader>();
   const location = useLocation();
   const submit = useSubmit();
+  const revalidator = useRevalidator();
   const { theme, toggleTheme } = useTheme();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [openMenuSessionId, setOpenMenuSessionId] = useState<string | null>(null);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [deleteModalState, setDeleteModalState] = useState<DeleteModalState | null>(null);
+  const [deletingBookmarkId, setDeletingBookmarkId] = useState<string | null>(null);
+  const [bookmarkError, setBookmarkError] = useState<string | null>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -288,6 +309,36 @@ export default function ChatLayout() {
     setDeleteModalState(null);
   };
 
+  const handleDeleteBookmark = async (event: React.MouseEvent<HTMLButtonElement>, bookmarkId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (deletingBookmarkId) {
+      return;
+    }
+
+    setBookmarkError(null);
+    setDeletingBookmarkId(bookmarkId);
+
+    try {
+      const response = await fetch(`/api/bookmarks/${bookmarkId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || "删除书签失败");
+      }
+
+      revalidator.revalidate();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "删除书签失败";
+      setBookmarkError(message);
+    } finally {
+      setDeletingBookmarkId(null);
+    }
+  };
+
   return (
     <div className="chat-shell relative flex h-screen overflow-hidden bg-[var(--color-background)] text-[var(--chat-ink)]">
 
@@ -366,6 +417,88 @@ export default function ChatLayout() {
             )}
           </div>
 
+          <div className="mt-4 space-y-2">
+            <div className="px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--chat-muted)]">
+              快捷书签
+            </div>
+
+            {bookmarks.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-[var(--chat-line)] bg-[var(--chat-hover-bg)] px-3 py-2 text-xs text-[var(--chat-muted)]">
+                暂无书签，聊天里的代码块可一键存档
+              </div>
+            ) : (
+              <div className="max-h-56 space-y-1 overflow-y-auto pr-1">
+                {bookmarks.map((bookmark) => (
+                  <div
+                    key={bookmark.id}
+                    className={[
+                      "group/bookmark rounded-lg border px-2.5 py-2 transition-colors",
+                      bookmark.isSessionActive
+                        ? "border-[var(--chat-line)] bg-[var(--chat-panel)]/60 hover:bg-[var(--chat-hover-bg)]"
+                        : "border-[var(--chat-line)] bg-gray-100/70 opacity-50",
+                    ].join(" ")}
+                  >
+                    <div className="flex items-start gap-2">
+                      {bookmark.isSessionActive ? (
+                        <Link
+                          to={`/chat/${bookmark.sessionId}`}
+                          onClick={() => setIsMobileMenuOpen(false)}
+                          className="min-w-0 flex-1"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <span className="inline-flex h-4 min-w-4 items-center justify-center rounded border border-[var(--chat-line)] bg-[var(--chat-hover-bg)] px-1 text-[10px] font-semibold uppercase text-[var(--chat-muted)]">
+                              {bookmark.language.slice(0, 2) || "--"}
+                            </span>
+                            <span className="truncate text-xs font-medium text-[var(--chat-ink)]">
+                              {formatBookmarkTitle(bookmark.title)}
+                            </span>
+                          </div>
+                          <div className="mt-1 truncate text-[11px] text-[var(--chat-muted)]">
+                            {formatBookmarkPreview(bookmark.codePreview)}
+                          </div>
+                        </Link>
+                      ) : (
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="inline-flex h-4 min-w-4 items-center justify-center rounded border border-[var(--chat-line)] bg-[var(--chat-hover-bg)] px-1 text-[10px] font-semibold uppercase text-[var(--chat-muted)]">
+                              {bookmark.language.slice(0, 2) || "--"}
+                            </span>
+                            <span className="truncate text-xs font-medium text-[var(--chat-ink)]">
+                              {formatBookmarkTitle(bookmark.title)}
+                            </span>
+                          </div>
+                          <div className="mt-1 truncate text-[11px] text-[var(--chat-muted)]">
+                            {formatBookmarkPreview(bookmark.codePreview)}
+                          </div>
+                          <div className="mt-1 text-[10px] font-medium text-red-500">会话已失效</div>
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={(event) => void handleDeleteBookmark(event, bookmark.id)}
+                        disabled={deletingBookmarkId === bookmark.id}
+                        className="mt-0.5 inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-[var(--chat-muted)] hover:bg-[var(--chat-hover-bg)] hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+                        aria-label="删除书签"
+                        title="删除书签"
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 7h16m-10 4v6m4-6v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {bookmarkError ? (
+              <div className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[11px] text-red-600">
+                {bookmarkError}
+              </div>
+            ) : null}
+          </div>
+
           <Link
             to="/chat"
             onClick={() => setIsMobileMenuOpen(false)}
@@ -416,7 +549,7 @@ export default function ChatLayout() {
                                 "group relative block rounded-lg px-3 py-2 pr-8 text-sm",
                                 "transition-all duration-200",
                                 isActive
-                                  ? "bg-[var(--chat-panel)] shadow-sm text-[var(--chat-ink)] border border-[var(--chat-line)]"
+                                  ? "bg-[var(--chat-panel)] text-[var(--chat-ink)] border border-[var(--chat-line)]"
                                   : "text-[var(--chat-muted)] hover:bg-[var(--chat-hover-bg)] hover:text-[var(--chat-ink)]",
                               ].join(" ")
                             }
@@ -497,7 +630,7 @@ export default function ChatLayout() {
               className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-[var(--chat-hover-bg)] transition-colors cursor-pointer"
               onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
             >
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--chat-panel)] border border-[var(--chat-line)] text-sm font-semibold text-[var(--chat-ink)] shadow-sm">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--chat-panel)] border border-[var(--chat-line)] text-sm font-semibold text-[var(--chat-ink)]">
                 {user.username.charAt(0).toUpperCase()}
               </div>
               <div className="min-w-0 flex-1">

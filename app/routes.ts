@@ -25,4 +25,6 @@ export default [
 
   // API routes
   route("api/preferences/network", "routes/api/preferences.network.ts"),
+  route("api/bookmarks", "routes/api/bookmarks.ts"),
+  route("api/bookmarks/:bookmarkId", "routes/api/bookmarks.$bookmarkId.ts"),
 ] satisfies RouteConfig;

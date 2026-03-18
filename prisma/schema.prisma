@@ -21,8 +21,29 @@ model User {
   // Relations (to be used by auth-and-data-model workstream)
   sessions    ChatSession[]
   preferences UserPreference?
+  bookmarks   CodeBookmark[]
 
   @@map("users")
+}
+
+model CodeBookmark {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  sessionId   String   @map("session_id")
+  messageId   String   @map("message_id")
+  title       String
+  codePreview String   @map("code_preview") @db.Text
+  codeContent String   @map("code_content") @db.LongText
+  language    String
+  lineNumber  Int?     @map("line_number")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([sessionId])
+  @@index([messageId])
+  @@map("code_bookmarks")
 }
 
 enum UserRole {

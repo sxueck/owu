@@ -1,7 +1,7 @@
 import type { Route } from "./+types/session";
-import { useLoaderData, useLocation, useNavigate } from "react-router";
+import { useLoaderData, useLocation, useNavigate, useRevalidator } from "react-router";
 import { getSession } from "~/sessions";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
@@ -9,12 +9,45 @@ import { TokenUsageRing } from "~/components/chat/token-usage-ring";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 
+async function copyToClipboard(text: string): Promise<void> {
+  if (typeof window === "undefined") {
+    throw new Error("Clipboard is not available outside browser context");
+  }
+
+  if (window.isSecureContext && window.navigator.clipboard?.writeText) {
+    await window.navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.setAttribute("readonly", "true");
+  textArea.style.position = "fixed";
+  textArea.style.top = "0";
+  textArea.style.left = "-9999px";
+  textArea.style.opacity = "0";
+
+  document.body.appendChild(textArea);
+  try {
+    textArea.focus();
+    textArea.select();
+    textArea.setSelectionRange(0, textArea.value.length);
+
+    const copied = document.execCommand("copy");
+    if (!copied) {
+      throw new Error("Copy command failed");
+    }
+  } finally {
+    document.body.removeChild(textArea);
+  }
+}
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyToClipboard(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
@@ -84,6 +117,30 @@ type SSEEvent =
 
 function getSessionTokenUsageStorageKey(sessionId: string): string {
   return `chat-session-token-usage:${sessionId}`;
+}
+
+interface CodeBookmarkPayload {
+  messageId: string;
+  language: string;
+  codeContent: string;
+  lineNumber?: number;
+  defaultTitle: string;
+}
+
+function BookmarkButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-white/70 transition-all duration-200 hover:bg-white/10 hover:text-white"
+      title="保存代码书签"
+    >
+      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 3H7a2 2 0 0 0-2 2v16l7-4 7 4V5a2 2 0 0 0-2-2Z" />
+      </svg>
+      <span>存档</span>
+    </button>
+  );
 }
 
 function readSessionTokenUsage(sessionId: string): number {
@@ -175,7 +232,175 @@ function formatDate(value: Date): string {
   });
 }
 
-function MessageContent({ content }: { content: string }) {
+function getDefaultBookmarkTitle(codeContent: string): string {
+  const normalized = codeContent.replace(/\r\n/g, "\n").trim();
+  const firstLine = normalized.split("\n").find((line) => line.trim().length > 0) ?? "";
+  const compact = firstLine.replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return "Untitled snippet";
+  }
+
+  return compact.length > 30 ? `${compact.slice(0, 30)}...` : compact;
+}
+
+function getCodePreviewLines(codeContent: string, maxLines = 10): string {
+  const lines = codeContent.replace(/\r\n/g, "\n").split("\n").slice(0, maxLines);
+  return lines.join("\n");
+}
+
+const LONG_CODE_BLOCK_LINE_THRESHOLD = 20;
+
+interface LongCodeBlock {
+  id: string;
+  language: string;
+  codeContent: string;
+  lineCount: number;
+  sequence: number;
+}
+
+function areLongCodeBlocksEqual(current: LongCodeBlock[], next: LongCodeBlock[]): boolean {
+  if (current.length !== next.length) {
+    return false;
+  }
+
+  for (let index = 0; index < current.length; index += 1) {
+    const currentBlock = current[index];
+    const nextBlock = next[index];
+    if (!nextBlock) {
+      return false;
+    }
+
+    if (
+      currentBlock.id !== nextBlock.id
+      || currentBlock.language !== nextBlock.language
+      || currentBlock.codeContent !== nextBlock.codeContent
+      || currentBlock.lineCount !== nextBlock.lineCount
+      || currentBlock.sequence !== nextBlock.sequence
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function getCodeLineCount(codeContent: string): number {
+  const normalized = codeContent.replace(/\r\n/g, "\n");
+  if (!normalized) {
+    return 0;
+  }
+
+  return normalized.split("\n").length;
+}
+
+function getMessageKeyFromLongCodeBlockId(blockId: string): string {
+  const separatorIndex = blockId.lastIndexOf(":long-code:");
+  if (separatorIndex === -1) {
+    return blockId;
+  }
+
+  return blockId.slice(0, separatorIndex);
+}
+
+function CodeBlockCard({
+  language,
+  codeContent,
+  messageId,
+  onBookmarkRequest,
+  className,
+}: {
+  language: string;
+  codeContent: string;
+  messageId?: string;
+  onBookmarkRequest?: (payload: CodeBookmarkPayload) => void;
+  className?: string;
+}) {
+  return (
+    <div className={[
+      "overflow-hidden rounded-2xl border border-[rgba(20,33,28,0.15)] bg-[#1a2822] shadow-lg transition-all duration-200 hover:shadow-xl",
+      className || "",
+    ].join(" ")}>
+      <div className="flex items-center justify-between border-b border-white/10 bg-[#14211c] px-4 py-2.5">
+        <div className="flex items-center gap-2">
+          {language ? (
+            <span className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--chat-accent)]">
+              {language}
+            </span>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-1">
+          {messageId && onBookmarkRequest ? (
+            <BookmarkButton
+              onClick={() =>
+                onBookmarkRequest({
+                  messageId,
+                  language: language || "text",
+                  codeContent,
+                  defaultTitle: getDefaultBookmarkTitle(codeContent),
+                })
+              }
+            />
+          ) : null}
+          <CopyButton text={codeContent} />
+        </div>
+      </div>
+      <div className="relative">
+        <SyntaxHighlighter
+          language={language || "text"}
+          style={vscDarkPlus}
+          customStyle={{
+            margin: 0,
+            padding: "1rem",
+            background: "transparent",
+            fontSize: "13px",
+            lineHeight: "1.6",
+            fontFamily: "var(--font-mono)",
+          }}
+          codeTagProps={{
+            style: {
+              fontFamily: "var(--font-mono)",
+            },
+          }}
+        >
+          {codeContent}
+        </SyntaxHighlighter>
+      </div>
+    </div>
+  );
+}
+
+function MessageContent({
+  content,
+  messageId,
+  onBookmarkRequest,
+  activeLongCodeBlockId,
+  onLongCodeBlockSelect,
+  onLongCodeBlocksChange,
+}: {
+  content: string;
+  messageId?: string;
+  onBookmarkRequest?: (payload: CodeBookmarkPayload) => void;
+  activeLongCodeBlockId?: string | null;
+  onLongCodeBlockSelect?: (block: LongCodeBlock) => void;
+  onLongCodeBlocksChange?: (messageKey: string, blocks: LongCodeBlock[]) => void;
+}) {
+  const messageKey = messageId ?? "pending-assistant";
+  const codeBlockOrderRef = useRef(0);
+  const discoveredLongCodeBlocksRef = useRef<LongCodeBlock[]>([]);
+
+  codeBlockOrderRef.current = 0;
+  discoveredLongCodeBlocksRef.current = [];
+
+  useEffect(() => {
+    onLongCodeBlocksChange?.(messageKey, discoveredLongCodeBlocksRef.current);
+  }, [content, messageKey, onLongCodeBlocksChange]);
+
+  useEffect(() => {
+    return () => {
+      onLongCodeBlocksChange?.(messageKey, []);
+    };
+  }, [messageKey, onLongCodeBlocksChange]);
+
   return (
     <div className="markdown-content">
       <ReactMarkdown
@@ -193,53 +418,72 @@ function MessageContent({ content }: { content: string }) {
           li: ({ children }) => <li className="leading-7">{children}</li>,
           code: ({ className, children, ...props }) => {
             const match = /language-(\w+)/.exec(className || "");
-            const isInline = !className;
-            
+            const codeString = String(children).replace(/\n$/, "");
+            const isInline = !className && !codeString.includes("\n");
+
             if (isInline) {
               return (
-                <code className="rounded-md bg-[rgba(20,33,28,0.08)] px-1.5 py-0.5 text-[0.9em] transition-colors duration-150 hover:bg-[rgba(20,33,28,0.12)]" style={{ fontFamily: 'var(--font-mono)' }} {...props}>
+                <code className="rounded-md bg-[rgba(20,33,28,0.08)] px-1.5 py-0.5 text-[0.9em] transition-colors duration-150 hover:bg-[rgba(20,33,28,0.12)]" style={{ fontFamily: "var(--font-mono)" }} {...props}>
                   {children}
                 </code>
               );
             }
-            
+
             const language = match ? match[1] : "";
-            const codeString = String(children).replace(/\n$/, "");
-            
+            const lineCount = getCodeLineCount(codeString);
+            const blockSequence = codeBlockOrderRef.current;
+            codeBlockOrderRef.current += 1;
+
+            if (lineCount > LONG_CODE_BLOCK_LINE_THRESHOLD) {
+              const blockId = `${messageKey}:long-code:${blockSequence}`;
+              const longCodeBlock: LongCodeBlock = {
+                id: blockId,
+                language,
+                codeContent: codeString,
+                lineCount,
+                sequence: blockSequence,
+              };
+
+              discoveredLongCodeBlocksRef.current.push(longCodeBlock);
+
+              const isActive = activeLongCodeBlockId === blockId;
+
+              return (
+                <button
+                  type="button"
+                  onClick={() => onLongCodeBlockSelect?.(longCodeBlock)}
+                  className={[
+                    "my-4 flex w-full items-start gap-3 rounded-2xl border border-dashed px-4 py-3 text-left transition-colors",
+                    isActive
+                      ? "border-[var(--chat-accent)] bg-[var(--chat-accent-soft)]"
+                      : "border-[var(--chat-line)] bg-[rgba(20,33,28,0.03)] hover:border-[var(--chat-accent)] hover:bg-[var(--chat-accent-soft)]",
+                  ].join(" ")}
+                >
+                  <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[rgba(20,33,28,0.08)] text-[var(--chat-accent)]">
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 7h18M3 12h18M3 17h18" />
+                    </svg>
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold text-[var(--chat-ink)]">
+                      代码块 #{blockSequence + 1} 已折叠
+                    </span>
+                    <span className="mt-1 block text-xs text-[var(--chat-muted)]">
+                      {lineCount} 行{language ? ` (${language})` : ""}，点击在右侧查看完整内容
+                    </span>
+                  </span>
+                </button>
+              );
+            }
+
             return (
-              <div className="my-4 overflow-hidden rounded-2xl border border-[rgba(20,33,28,0.15)] bg-[#1a2822] shadow-lg transition-all duration-200 hover:shadow-xl">
-                <div className="flex items-center justify-between border-b border-white/10 bg-[#14211c] px-4 py-2.5">
-                  <div className="flex items-center gap-2">
-                    {language && (
-                      <span className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--chat-accent)]">
-                        {language}
-                      </span>
-                    )}
-                  </div>
-                  <CopyButton text={codeString} />
-                </div>
-                <div className="relative">
-                  <SyntaxHighlighter
-                    language={language || "text"}
-                    style={vscDarkPlus}
-                    customStyle={{
-                      margin: 0,
-                      padding: "1rem",
-                      background: "transparent",
-                      fontSize: "13px",
-                      lineHeight: "1.6",
-                      fontFamily: "var(--font-mono)",
-                    }}
-                    codeTagProps={{
-                      style: {
-                        fontFamily: "var(--font-mono)",
-                      },
-                    }}
-                  >
-                    {codeString}
-                  </SyntaxHighlighter>
-                </div>
-              </div>
+              <CodeBlockCard
+                language={language}
+                codeContent={codeString}
+                messageId={messageId}
+                onBookmarkRequest={onBookmarkRequest}
+                className="my-4"
+              />
             );
           },
           pre: ({ children }) => <>{children}</>,
@@ -364,6 +608,10 @@ interface MessageCardProps {
   onEditCancel?: () => void;
   onEditSave?: () => void;
   onRegenerate?: (messageId: string) => void;
+  onBookmarkRequest?: (payload: CodeBookmarkPayload) => void;
+  activeLongCodeBlockId?: string | null;
+  onLongCodeBlockSelect?: (block: LongCodeBlock) => void;
+  onLongCodeBlocksChange?: (messageKey: string, blocks: LongCodeBlock[]) => void;
 }
 
 function MessageCard({
@@ -387,6 +635,10 @@ function MessageCard({
   onEditCancel,
   onEditSave,
   onRegenerate,
+  onBookmarkRequest,
+  activeLongCodeBlockId,
+  onLongCodeBlockSelect,
+  onLongCodeBlocksChange,
 }: MessageCardProps) {
   const isUser = role === "user";
   const isAssistant = role === "assistant";
@@ -487,7 +739,14 @@ function MessageCard({
                 <span>{pendingStatus}</span>
               </div>
             ) : null}
-            <MessageContent content={content} />
+            <MessageContent
+              content={content}
+              messageId={id}
+              onBookmarkRequest={onBookmarkRequest}
+              activeLongCodeBlockId={activeLongCodeBlockId}
+              onLongCodeBlockSelect={onLongCodeBlockSelect}
+              onLongCodeBlocksChange={onLongCodeBlocksChange}
+            />
           </div>
         )}
         {pending && <span className="ml-1 inline-block h-4 w-1.5 animate-pulse rounded-full bg-[var(--chat-accent)] align-middle" />}
@@ -522,6 +781,7 @@ export default function ChatSessionPage() {
   const { models, session, messages: initialMessages, preferences } = useLoaderData<typeof loader>();
   const location = useLocation();
   const navigate = useNavigate();
+  const revalidator = useRevalidator();
   const [messages, setMessages] = useState<LoaderData["messages"]>(initialMessages);
   const [pendingAssistant, setPendingAssistant] = useState<PendingAssistantMessage | null>(null);
 
@@ -545,6 +805,11 @@ export default function ChatSessionPage() {
     return searchParams.get("thinking") === "1";
   });
   const [notice, setNotice] = useState<{ level: "info" | "warning"; message: string } | null>(null);
+  const [bookmarkDraft, setBookmarkDraft] = useState<(CodeBookmarkPayload & { title: string }) | null>(null);
+  const [isSavingBookmark, setIsSavingBookmark] = useState(false);
+  const [bookmarkError, setBookmarkError] = useState<string | null>(null);
+  const [longCodeBlocksByMessage, setLongCodeBlocksByMessage] = useState<Record<string, LongCodeBlock[]>>({});
+  const [activeLongCodeBlock, setActiveLongCodeBlock] = useState<LongCodeBlock | null>(null);
 
   // Persist network preference when toggled
   const persistNetworkPreference = useCallback(async (enabled: boolean) => {
@@ -621,6 +886,26 @@ export default function ChatSessionPage() {
     return null;
   })();
   const lastAssistantMessageId = [...messages].reverse().find((message) => message.role === "assistant")?.id ?? null;
+  const orderedMessageKeys = useMemo(() => {
+    const keys = messages.map((message) => message.id);
+    if (isStreaming && pendingAssistant?.id) {
+      keys.push(pendingAssistant.id);
+    }
+    return keys;
+  }, [isStreaming, messages, pendingAssistant?.id]);
+  const orderedLongCodeBlocks = useMemo(
+    () => orderedMessageKeys.flatMap((key) => longCodeBlocksByMessage[key] ?? []),
+    [longCodeBlocksByMessage, orderedMessageKeys],
+  );
+  const persistedMessageIdSet = useMemo(() => new Set(messages.map((message) => message.id)), [messages]);
+  const activeLongCodeBlockMessageId = useMemo(() => {
+    if (!activeLongCodeBlock) {
+      return undefined;
+    }
+
+    const messageKey = getMessageKeyFromLongCodeBlockId(activeLongCodeBlock.id);
+    return persistedMessageIdSet.has(messageKey) ? messageKey : undefined;
+  }, [activeLongCodeBlock, persistedMessageIdSet]);
 
   useEffect(() => {
     if (sessionIdRef.current === session.id) {
@@ -635,6 +920,8 @@ export default function ChatSessionPage() {
     setError(null);
     setNotice(null);
     setSessionTokenUsage(readSessionTokenUsage(session.id));
+    setLongCodeBlocksByMessage({});
+    setActiveLongCodeBlock(null);
     shouldAutoScrollRef.current = true;
     requestAnimationFrame(() => {
       scrollToBottom("auto");
@@ -670,6 +957,21 @@ export default function ChatSessionPage() {
   }, [messages, pendingAssistant?.content, pendingAssistant?.statusMessage, scrollToBottom]);
 
   useEffect(() => {
+    setActiveLongCodeBlock((current) => {
+      if (orderedLongCodeBlocks.length === 0) {
+        return null;
+      }
+
+      if (!current) {
+        return orderedLongCodeBlocks[0];
+      }
+
+      const refreshedCurrent = orderedLongCodeBlocks.find((block) => block.id === current.id);
+      return refreshedCurrent ?? orderedLongCodeBlocks[0];
+    });
+  }, [orderedLongCodeBlocks]);
+
+  useEffect(() => {
     if (!isModelMenuOpen) {
       return;
     }
@@ -684,6 +986,21 @@ export default function ChatSessionPage() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [isModelMenuOpen]);
+
+  useEffect(() => {
+    if (!bookmarkDraft) {
+      return;
+    }
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setBookmarkDraft(null);
+      }
+    };
+
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, [bookmarkDraft]);
 
   const submitPrompt = useCallback(
     async (rawContent: string, model = selectedModel, options: SubmitPromptOptions = {}) => {
@@ -974,6 +1291,80 @@ export default function ChatSessionPage() {
     });
   }, [selectedModel, submitPrompt]);
 
+  const handleBookmarkRequest = useCallback((payload: CodeBookmarkPayload) => {
+    setBookmarkError(null);
+    setBookmarkDraft({
+      ...payload,
+      title: payload.defaultTitle || getDefaultBookmarkTitle(payload.codeContent),
+    });
+  }, []);
+
+  const handleLongCodeBlocksChange = useCallback((messageKey: string, blocks: LongCodeBlock[]) => {
+    setLongCodeBlocksByMessage((current) => {
+      const existing = current[messageKey] ?? [];
+
+      if (blocks.length === 0) {
+        if (!(messageKey in current)) {
+          return current;
+        }
+
+        const rest = { ...current };
+        delete rest[messageKey];
+        return rest;
+      }
+
+      if (areLongCodeBlocksEqual(existing, blocks)) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [messageKey]: blocks,
+      };
+    });
+  }, []);
+
+  const handleSaveBookmark = useCallback(async () => {
+    if (!bookmarkDraft || isSavingBookmark) {
+      return;
+    }
+
+    setIsSavingBookmark(true);
+    setBookmarkError(null);
+
+    try {
+      const response = await fetch("/api/bookmarks", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sessionId: session.id,
+          messageId: bookmarkDraft.messageId,
+          title: bookmarkDraft.title,
+          codeContent: bookmarkDraft.codeContent,
+          language: bookmarkDraft.language,
+          lineNumber: bookmarkDraft.lineNumber,
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || "保存书签失败");
+      }
+
+      setBookmarkDraft(null);
+      revalidator.revalidate();
+      setNotice({ level: "info", message: "代码块已保存到快捷书签" });
+      setTimeout(() => setNotice(null), 4000);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "保存书签失败";
+      setBookmarkError(message);
+    } finally {
+      setIsSavingBookmark(false);
+    }
+  }, [bookmarkDraft, isSavingBookmark, revalidator, session.id]);
+
   const handleStopGeneration = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -1007,75 +1398,176 @@ export default function ChatSessionPage() {
   }, [location.pathname, location.search, messages.length, navigate, selectedModel, submitPrompt]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div
-        ref={messagesContainerRef}
-        onScroll={handleMessagesScroll}
-        className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4 lg:px-6 lg:py-6"
-      >
-        <div className={[
-          "mx-auto flex w-full max-w-4xl",
-          messages.length === 0 && !isStreaming
-            ? "h-full flex-col items-center justify-center"
-            : "flex-col gap-5",
-        ].join(" ")}>
-          {messages.length === 0 && !isStreaming ? (
-            <div className="chat-panel-strong rounded-[30px] px-6 py-10 text-center sm:px-10">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--chat-forest-soft)] text-[var(--chat-forest)]">
-                <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.85 9.85 0 0 1-4.25-.95L3 20l1.4-3.72A8.94 8.94 0 0 1 3 12c0-4.42 4.03-8 9-8s9 3.58 9 8Z" />
-                </svg>
-              </div>
-              <h2 className="mt-5 text-xl font-medium text-[var(--chat-ink)]">
-                会话已准备就绪
-              </h2>
-              <p className="mx-auto mt-3 max-w-lg text-sm leading-7 text-[var(--chat-muted)] sm:text-base">
-                发送第一条消息开始对话，详细明了的提示词能优化任务
-              </p>
-            </div>
-          ) : (
-            <>
-              {messages.map((message) => (
-                <MessageCard
-                  key={message.id}
-                  id={message.id}
-                  role={message.role}
-                  content={message.content}
-                  reasoning={message.reasoning}
-                  followUpQuestions={
-                    !isStreaming && message.role === "assistant" && message.id === lastAssistantMessageId
-                      ? message.followUpQuestions
-                      : null
-                  }
-                  createdAt={message.createdAt}
-                  assistantLabel={message.modelLabel ?? activeAssistantLabel}
-                  onQuestionClick={submitPrompt}
-                  canEdit={!isStreaming && message.role === "user" && message.id === latestEditableUserMessage?.id}
-                  canRegenerate={!isStreaming && message.role === "assistant" && message.id === lastMessage?.id && message.id === lastAssistantMessage?.id}
-                  isEditing={message.id === editingMessageId}
-                  editDraft={message.id === editingMessageId ? editDraft : undefined}
-                  actionBusy={isStreaming}
-                  onEditDraftChange={setEditDraft}
-                  onEditStart={handleStartEdit}
-                  onEditCancel={handleCancelEdit}
-                  onEditSave={handleSaveEdit}
-                  onRegenerate={handleRegenerate}
-                />
-              ))}
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      {bookmarkDraft ? (
+        <div
+          className="absolute inset-0 z-[65] flex items-center justify-center bg-black/35 px-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bookmark-dialog-title"
+          onClick={() => setBookmarkDraft(null)}
+        >
+          <div
+            className="w-full max-w-2xl rounded-2xl border border-[var(--chat-line)] bg-white p-5 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="bookmark-dialog-title" className="text-base font-semibold text-[var(--chat-ink)]">
+              保存代码书签
+            </h2>
+            <p className="mt-1 text-sm text-[var(--chat-muted)]">
+              你可以编辑标题，保存后会显示在侧边栏快捷书签中。
+            </p>
 
-              {isStreaming && pendingAssistant && (
-                <MessageCard
-                  role="assistant"
-                  content={pendingAssistant.content || (pendingAssistant.statusMessage ? "" : "...")}
-                  reasoning={pendingAssistant.reasoning || null}
-                  pendingStatus={pendingAssistant.statusMessage}
-                  pending
-                  assistantLabel={activeAssistantLabel}
-                />
+            <label className="mt-4 block text-xs font-medium text-[var(--chat-muted)]">标题</label>
+            <input
+              value={bookmarkDraft.title}
+              maxLength={120}
+              onChange={(event) => setBookmarkDraft((current) => current ? { ...current, title: event.target.value } : current)}
+              className="mt-1 w-full rounded-lg border border-[var(--chat-line)] bg-white px-3 py-2 text-sm text-[var(--chat-ink)] outline-none focus:border-[var(--chat-accent)]"
+              placeholder="输入书签标题"
+            />
+
+            <div className="mt-4 rounded-lg border border-[var(--chat-line)] bg-[#1a2822] p-3">
+              <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-[var(--chat-accent)]">
+                <span>{bookmarkDraft.language || "text"}</span>
+                <span className="text-white/50">Preview</span>
+              </div>
+              <pre className="max-h-64 overflow-auto text-xs leading-6 text-white/90" style={{ fontFamily: "var(--font-mono)" }}>
+                {getCodePreviewLines(bookmarkDraft.codeContent, 10)}
+              </pre>
+            </div>
+
+            {bookmarkError ? (
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {bookmarkError}
+              </div>
+            ) : null}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setBookmarkDraft(null)}
+                className="rounded-lg border border-[var(--chat-line)] px-4 py-2 text-sm text-[var(--chat-ink)] hover:bg-[var(--chat-hover-bg)]"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSaveBookmark()}
+                disabled={isSavingBookmark || !bookmarkDraft.title.trim()}
+                className="rounded-lg bg-[var(--chat-accent)] px-4 py-2 text-sm text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSavingBookmark ? "保存中..." : "保存书签"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="min-h-0 flex-1">
+        <div className={[
+          "mx-auto h-full w-full",
+          activeLongCodeBlock ? "gap-0 lg:grid lg:grid-cols-2" : "max-w-4xl px-3 py-4 sm:px-4 lg:px-6 lg:py-6",
+        ].join(" ")}>
+          <section
+            ref={messagesContainerRef}
+            onScroll={handleMessagesScroll}
+            className={[
+              "min-h-0 h-full overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
+              activeLongCodeBlock ? "rounded-none border-r border-[var(--chat-line)] bg-[var(--chat-panel)] px-4 py-4 sm:px-6 lg:px-8 lg:py-6" : "",
+            ].join(" ")}
+          >
+            <div className={[
+              "mx-auto flex w-full",
+              messages.length === 0 && !isStreaming
+                ? "h-full flex-col items-center justify-center"
+                : "flex-col gap-5",
+            ].join(" ")}>
+              {messages.length === 0 && !isStreaming ? (
+                <div className="chat-panel-strong rounded-[30px] px-6 py-10 text-center sm:px-10">
+                  <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--chat-forest-soft)] text-[var(--chat-forest)]">
+                    <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.85 9.85 0 0 1-4.25-.95L3 20l1.4-3.72A8.94 8.94 0 0 1 3 12c0-4.42 4.03-8 9-8s9 3.58 9 8Z" />
+                    </svg>
+                  </div>
+                  <h2 className="mt-5 text-xl font-medium text-[var(--chat-ink)]">
+                    会话已准备就绪
+                  </h2>
+                  <p className="mx-auto mt-3 max-w-lg text-sm leading-7 text-[var(--chat-muted)] sm:text-base">
+                    发送第一条消息开始对话，详细明了的提示词能优化任务
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {messages.map((message) => (
+                    <MessageCard
+                      key={message.id}
+                      id={message.id}
+                      role={message.role}
+                      content={message.content}
+                      reasoning={message.reasoning}
+                      followUpQuestions={
+                        !isStreaming && message.role === "assistant" && message.id === lastAssistantMessageId
+                          ? message.followUpQuestions
+                          : null
+                      }
+                      createdAt={message.createdAt}
+                      assistantLabel={message.modelLabel ?? activeAssistantLabel}
+                      onQuestionClick={submitPrompt}
+                      canEdit={!isStreaming && message.role === "user" && message.id === latestEditableUserMessage?.id}
+                      canRegenerate={!isStreaming && message.role === "assistant" && message.id === lastMessage?.id && message.id === lastAssistantMessage?.id}
+                      isEditing={message.id === editingMessageId}
+                      editDraft={message.id === editingMessageId ? editDraft : undefined}
+                      actionBusy={isStreaming}
+                      onEditDraftChange={setEditDraft}
+                      onEditStart={handleStartEdit}
+                      onEditCancel={handleCancelEdit}
+                      onEditSave={handleSaveEdit}
+                      onRegenerate={handleRegenerate}
+                      onBookmarkRequest={handleBookmarkRequest}
+                      activeLongCodeBlockId={activeLongCodeBlock?.id}
+                      onLongCodeBlockSelect={setActiveLongCodeBlock}
+                      onLongCodeBlocksChange={handleLongCodeBlocksChange}
+                    />
+                  ))}
+
+                  {isStreaming && pendingAssistant && (
+                    <MessageCard
+                      id={pendingAssistant.id}
+                      role="assistant"
+                      content={pendingAssistant.content || (pendingAssistant.statusMessage ? "" : "...")}
+                      reasoning={pendingAssistant.reasoning || null}
+                      pendingStatus={pendingAssistant.statusMessage}
+                      pending
+                      assistantLabel={activeAssistantLabel}
+                      activeLongCodeBlockId={activeLongCodeBlock?.id}
+                      onLongCodeBlockSelect={setActiveLongCodeBlock}
+                      onLongCodeBlocksChange={handleLongCodeBlocksChange}
+                    />
+                  )}
+                </>
               )}
-            </>
-          )}
-          <div ref={messagesEndRef} />
+              <div ref={messagesEndRef} />
+            </div>
+          </section>
+
+          {activeLongCodeBlock ? (
+            <aside className="min-h-0 h-full overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden rounded-none border-l border-[var(--chat-line)] bg-[var(--chat-panel)] p-4 lg:p-6">
+              <div className="sticky top-0 z-10 mb-3 flex items-center justify-between rounded-lg border border-[var(--chat-line)] bg-[var(--chat-panel)] px-3 py-2 text-xs text-[var(--chat-muted)]">
+                <span>右侧代码视图</span>
+                <span>
+                  #{activeLongCodeBlock.sequence + 1} · {activeLongCodeBlock.lineCount} 行
+                </span>
+              </div>
+              <CodeBlockCard
+                language={activeLongCodeBlock.language}
+                codeContent={activeLongCodeBlock.codeContent}
+                messageId={activeLongCodeBlockMessageId}
+                onBookmarkRequest={handleBookmarkRequest}
+                className="my-0"
+              />
+            </aside>
+          ) : null}
         </div>
       </div>
 

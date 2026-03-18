@@ -10,7 +10,7 @@ export interface UserPreferencesInput {
 
 /**
  * Get user chat preferences.
- * Returns default values if no record exists (chatNetworkEnabled defaults to true).
+ * Returns default values if no record exists (chatNetworkEnabled defaults to false).
  */
 export async function getUserChatPreferences(userId: string): Promise<UserChatPreferences> {
   const preference = await prisma.userPreference.findUnique({

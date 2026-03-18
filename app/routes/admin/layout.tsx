@@ -57,7 +57,7 @@ export default function AdminLayout() {
                     [
                       "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                       isActive
-                        ? "bg-[var(--chat-panel)] text-[var(--chat-ink)] shadow-sm border border-[var(--chat-line)]"
+                        ? "bg-[var(--chat-panel)] text-[var(--chat-ink)] border border-[var(--chat-line)]"
                         : "text-[var(--chat-muted)] hover:bg-[var(--chat-hover-bg)] hover:text-[var(--chat-ink)]",
                     ].join(" ")
                   }
@@ -82,7 +82,7 @@ export default function AdminLayout() {
                     [
                       "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                       isActive
-                        ? "bg-[var(--chat-panel)] text-[var(--chat-ink)] shadow-sm border border-[var(--chat-line)]"
+                        ? "bg-[var(--chat-panel)] text-[var(--chat-ink)] border border-[var(--chat-line)]"
                         : "text-[var(--chat-muted)] hover:bg-[var(--chat-hover-bg)] hover:text-[var(--chat-ink)]",
                     ].join(" ")
                   }
@@ -99,7 +99,7 @@ export default function AdminLayout() {
                     [
                       "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                       isActive
-                        ? "bg-[var(--chat-panel)] text-[var(--chat-ink)] shadow-sm border border-[var(--chat-line)]"
+                        ? "bg-[var(--chat-panel)] text-[var(--chat-ink)] border border-[var(--chat-line)]"
                         : "text-[var(--chat-muted)] hover:bg-[var(--chat-hover-bg)] hover:text-[var(--chat-ink)]",
                     ].join(" ")
                   }
@@ -116,7 +116,7 @@ export default function AdminLayout() {
                     [
                       "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                       isActive
-                        ? "bg-[var(--chat-panel)] text-[var(--chat-ink)] shadow-sm border border-[var(--chat-line)]"
+                        ? "bg-[var(--chat-panel)] text-[var(--chat-ink)] border border-[var(--chat-line)]"
                         : "text-[var(--chat-muted)] hover:bg-[var(--chat-hover-bg)] hover:text-[var(--chat-ink)]",
                     ].join(" ")
                   }
@@ -133,7 +133,7 @@ export default function AdminLayout() {
 
         <div className="border-t border-[var(--chat-sidebar-border)] px-3 py-3">
           <div className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-[var(--chat-hover-bg)] transition-colors">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--chat-panel)] border border-[var(--chat-line)] text-sm font-semibold text-[var(--chat-ink)] shadow-sm">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--chat-panel)] border border-[var(--chat-line)] text-sm font-semibold text-[var(--chat-ink)]">
               {user.username.charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
