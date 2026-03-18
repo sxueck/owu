@@ -26,6 +26,9 @@ export interface AssistantMessageWithToolCalls {
   role: "assistant";
   content: string | null;
   tool_calls: AssistantToolCall[];
+  reasoning_content?: string;
+  reasoning?: string;
+  thinking?: string;
 }
 
 export interface ChatCompletionTool {
@@ -45,10 +48,18 @@ export interface ChatCompletionOptions {
   model: string;
   provider: OpenAIProviderConfig;
   messages: (ChatCompletionMessage | ToolResultMessage)[];
-  temperature?: number;
   maxTokens?: number;
   tools?: ChatCompletionTool[];
+  toolChoice?: OpenAI.Chat.Completions.ChatCompletionToolChoiceOption;
+  thinking?: { type: "enabled" | "disabled" };
 }
+
+type ChatCompletionRequestWithThinking = (
+  | OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming
+  | OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming
+) & {
+  thinking?: { type: "enabled" | "disabled" };
+};
 
 export interface ChatCompletionResult {
   content: string;
@@ -150,6 +161,7 @@ export interface ChatCompletionWithToolCallsResult {
   content: string | null;
   reasoning?: string;
   toolCalls: AssistantToolCall[];
+  toolCallSource: "native" | "content" | "none";
   model: string;
   usage?: {
     promptTokens: number;
@@ -158,19 +170,88 @@ export interface ChatCompletionWithToolCallsResult {
   };
 }
 
+type ParsedToolCall = {
+  name: string;
+  arguments: Record<string, string>;
+};
+
+function extractToolCallsFromPattern(
+  content: string,
+  invokePattern: RegExp,
+  parameterPattern: RegExp,
+): ParsedToolCall[] {
+  const parsedCalls: ParsedToolCall[] = [];
+
+  for (const invokeMatch of content.matchAll(invokePattern)) {
+    const functionName = invokeMatch[1]?.trim();
+    const body = invokeMatch[2] ?? "";
+
+    if (!functionName) {
+      continue;
+    }
+
+    const args: Record<string, string> = {};
+    for (const parameterMatch of body.matchAll(parameterPattern)) {
+      const key = parameterMatch[1]?.trim();
+      const value = parameterMatch[2]?.trim();
+      if (key && value) {
+        args[key] = value;
+      }
+    }
+
+    parsedCalls.push({
+      name: functionName,
+      arguments: args,
+    });
+  }
+
+  return parsedCalls;
+}
+
+function parseToolCallsFromContent(content: string | null): AssistantToolCall[] {
+  if (!content || content.trim().length === 0) {
+    return [];
+  }
+
+  const dsmlInvokePattern = /<[|\uFF5C]DSML[|\uFF5C]invoke\s+name=["']([^"']+)["']\s*>([\s\S]*?)<\/[|\uFF5C]DSML[|\uFF5C]invoke>/gi;
+  const dsmlParameterPattern = /<[|\uFF5C]DSML[|\uFF5C]parameter\s+name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/[|\uFF5C]DSML[|\uFF5C]parameter>/gi;
+  const xmlInvokePattern = /<invoke\s+name=["']([^"']+)["']\s*>([\s\S]*?)<\/invoke>/gi;
+  const xmlParameterPattern = /<parameter\s+name=["']([^"']+)["'][^>]*>([\s\S]*?)<\/parameter>/gi;
+
+  const dsmlCalls = extractToolCallsFromPattern(content, dsmlInvokePattern, dsmlParameterPattern);
+  const genericCalls = extractToolCallsFromPattern(content, xmlInvokePattern, xmlParameterPattern);
+  const combinedCalls = [...dsmlCalls, ...genericCalls];
+
+  return combinedCalls.map((call, index) => ({
+    id: `content-tool-call-${index + 1}`,
+    type: "function",
+    function: {
+      name: call.name,
+      arguments: JSON.stringify(call.arguments),
+    },
+  }));
+}
+
 export async function sendChatCompletion(options: ChatCompletionOptions): Promise<ChatCompletionResult> {
   const client = createOpenAIClient(options.provider);
 
   try {
-    const requestBody: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
+    const requestBody: ChatCompletionRequestWithThinking = {
       model: options.model,
       messages: options.messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
-      temperature: options.temperature ?? 1,
       max_tokens: options.maxTokens,
       tools: options.tools as OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
+      tool_choice: options.toolChoice,
     };
 
-    const response = await client.chat.completions.create(requestBody);
+    // Add thinking mode parameter for supported models (Kimi K2.5)
+    if (options.thinking) {
+      requestBody.thinking = options.thinking;
+    }
+
+    const response = await client.chat.completions.create(
+      requestBody as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
+    );
 
     const choice = response.choices[0];
     if (!choice || !choice.message) {
@@ -212,15 +293,22 @@ export async function sendChatCompletionWithToolCalls(
   const client = createOpenAIClient(options.provider);
 
   try {
-    const requestBody: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
+    const requestBody: ChatCompletionRequestWithThinking = {
       model: options.model,
       messages: options.messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
-      temperature: options.temperature ?? 1,
       max_tokens: options.maxTokens,
       tools: options.tools as OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
+      tool_choice: options.toolChoice,
     };
 
-    const response = await client.chat.completions.create(requestBody);
+    // Add thinking mode parameter for supported models (Kimi K2.5)
+    if (options.thinking) {
+      requestBody.thinking = options.thinking;
+    }
+
+    const response = await client.chat.completions.create(
+      requestBody as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
+    );
 
     const choice = response.choices[0];
     if (!choice || !choice.message) {
@@ -230,7 +318,8 @@ export async function sendChatCompletionWithToolCalls(
     const message = choice.message;
 
     // Extract tool calls if present
-    const toolCalls: AssistantToolCall[] = [];
+    let toolCalls: AssistantToolCall[] = [];
+    let toolCallSource: ChatCompletionWithToolCallsResult["toolCallSource"] = "none";
     if (message.tool_calls && Array.isArray(message.tool_calls)) {
       for (const tc of message.tool_calls) {
         if (tc.type === "function" && tc.function) {
@@ -243,6 +332,17 @@ export async function sendChatCompletionWithToolCalls(
             },
           });
         }
+      }
+
+      if (toolCalls.length > 0) {
+        toolCallSource = "native";
+      }
+    }
+
+    if (toolCalls.length === 0) {
+      toolCalls = parseToolCallsFromContent(message.content);
+      if (toolCalls.length > 0) {
+        toolCallSource = "content";
       }
     }
 
@@ -261,6 +361,7 @@ export async function sendChatCompletionWithToolCalls(
       content: message.content,
       reasoning,
       toolCalls,
+      toolCallSource,
       model: response.model,
       usage: response.usage
         ? {
@@ -320,16 +421,24 @@ export async function streamChatCompletion(
   const client = createOpenAIClient(options.provider);
 
   try {
-    const requestBody: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming = {
+    const requestBody: ChatCompletionRequestWithThinking = {
       model: options.model,
       messages: options.messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
-      temperature: options.temperature ?? 1,
       max_tokens: options.maxTokens,
       stream: true,
+      stream_options: { include_usage: true },
       tools: options.tools as OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
+      tool_choice: options.toolChoice,
     };
 
-    const stream = await client.chat.completions.create(requestBody);
+    // Add thinking mode parameter for supported models
+    if (options.thinking) {
+      requestBody.thinking = options.thinking;
+    }
+
+    const stream = await client.chat.completions.create(
+      requestBody as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
+    );
 
     let fullContent = "";
     let fullReasoning = "";

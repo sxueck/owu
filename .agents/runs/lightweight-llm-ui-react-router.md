@@ -457,7 +457,6 @@ import {
 const result = await sendChatCompletion({
   model: "gpt-4o-mini",
   messages: [{ role: "user", content: "Hello" }],
-  temperature: 0.7,
 });
 // Returns: { content, model, usage? }
 

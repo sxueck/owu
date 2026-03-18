@@ -88,7 +88,7 @@ function getDefaultProviders(config: LoaderData["config"] | null): ProviderFormV
 
 function formatTimestamp(value: Date | string | null | undefined): string {
   if (!value) {
-    return "Not saved yet";
+    return "未保存";
   }
 
   return new Date(value).toLocaleString();
@@ -292,60 +292,58 @@ export default function AdminProvidersPage() {
   }
 
   return (
-    <div className="space-y-6 text-[var(--chat-ink)]">
-      <section className="chat-panel relative overflow-hidden rounded-[30px] px-6 py-6 sm:px-8 sm:py-7">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(199,103,58,0.14),transparent_32%),radial-gradient(circle_at_bottom_left,rgba(37,83,70,0.12),transparent_28%)]" />
-        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div className="max-w-2xl">
-            <div className="inline-flex items-center gap-2 rounded-full border border-[var(--chat-line)] bg-white/70 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">
+    <div className="space-y-8 text-[var(--chat-ink)]">
+      {/* Header Section */}
+      <div className="border-b border-[var(--chat-line)] pb-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-sm text-[var(--chat-accent)]">
               <span className="h-2 w-2 rounded-full bg-[var(--chat-accent)]" />
-              Provider Console
+              供应商配置
             </div>
-            <h1 className="mt-4 font-serif text-3xl tracking-[-0.03em] sm:text-4xl">OpenAI vendor orchestration</h1>
-            <p className="mt-3 max-w-xl text-sm leading-7 text-[var(--chat-muted)] sm:text-base">
-              管理多个 OpenAI-compatible 供应商
-            </p>
+            <h1 className="mt-3 text-3xl font-semibold tracking-tight">模型供应商</h1>
+            <p className="mt-2 text-[var(--chat-muted)]">管理多个 OpenAI-compatible 供应商</p>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-3 lg:min-w-[360px]">
-            <div className="chat-panel-strong rounded-[22px] px-4 py-4">
-              <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">Providers</div>
-              <div className="mt-2 text-2xl font-semibold">{providers.length.toString().padStart(2, "0")}</div>
+          <div className="flex gap-3">
+            <div className="rounded-lg border border-[var(--chat-line)] bg-[var(--chat-panel)] px-4 py-3">
+              <div className="text-xs text-[var(--chat-muted)]">供应商</div>
+              <div className="text-xl font-semibold">{providers.length}</div>
             </div>
-            <div className="chat-panel-strong rounded-[22px] px-4 py-4">
-              <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">Models</div>
-              <div className="mt-2 text-2xl font-semibold">{totalModels.toString().padStart(2, "0")}</div>
+            <div className="rounded-lg border border-[var(--chat-line)] bg-[var(--chat-panel)] px-4 py-3">
+              <div className="text-xs text-[var(--chat-muted)]">模型</div>
+              <div className="text-xl font-semibold">{totalModels}</div>
             </div>
-            <div className="chat-panel-strong rounded-[22px] px-4 py-4">
-              <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">System</div>
-              <div className="mt-2 text-2xl font-semibold">{isConfigured ? "Ready" : "Draft"}</div>
+            <div className="rounded-lg border border-[var(--chat-line)] bg-[var(--chat-panel)] px-4 py-3">
+              <div className="text-xs text-[var(--chat-muted)]">状态</div>
+              <div className="text-xl font-semibold">{isConfigured ? "就绪" : "待配置"}</div>
             </div>
           </div>
         </div>
-      </section>
+      </div>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_280px]">
         <Form method="post" className="space-y-6">
           <input type="hidden" name="providersPayload" value={buildProvidersPayload(providers)} />
 
           {actionData?.success && (
-            <div className="rounded-[24px] border border-[rgba(37,83,70,0.2)] bg-[rgba(37,83,70,0.1)] px-5 py-4 text-sm text-[var(--chat-ink)]">
-              Configuration saved successfully.
+            <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+              配置保存成功
             </div>
           )}
 
           {(actionData?.errors?.general || actionData?.errors?.providers) && (
-            <div className="rounded-[24px] border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {actionData.errors?.general ?? actionData.errors?.providers}
             </div>
           )}
 
-          <section className="chat-panel rounded-[30px] px-5 py-5 sm:px-6 sm:py-6">
+          <div className="rounded-lg border border-[var(--chat-line)] bg-[var(--chat-panel)] p-5">
             <div className="flex flex-col gap-4 border-b border-[var(--chat-line)] pb-5 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h2 className="font-serif text-xl tracking-[-0.02em]">Provider stack</h2>
-                <p className="mt-1.5 text-sm leading-6 text-[var(--chat-muted)]">
-                  每个供应商都维护自己的 API key、Base URL 和同步后的模型列表。
+                <h2 className="text-lg font-medium">供应商列表</h2>
+                <p className="mt-1 text-sm text-[var(--chat-muted)]">
+                  每个供应商都维护自己的 API key、Base URL 和同步后的模型列表
                 </p>
               </div>
               <button
@@ -356,35 +354,35 @@ export default function AdminProvidersPage() {
                     { ...createEmptyProvider(current.length), isFetchingModels: false, fetchError: null },
                   ])
                 }
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-[var(--chat-line)] bg-white/80 px-4 py-2 text-sm font-medium text-[var(--chat-ink)] transition-colors hover:bg-white hover:border-[var(--chat-accent)]"
+                className="inline-flex items-center gap-2 rounded-lg border border-[var(--chat-line)] bg-white px-4 py-2 text-sm font-medium text-[var(--chat-ink)] transition-colors hover:border-[var(--chat-accent)] hover:bg-[var(--chat-hover-bg)]"
               >
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
-                Add provider
+                添加供应商
               </button>
             </div>
 
             <div className="mt-6 space-y-4">
               {providers.map((provider, index) => (
-                <article key={provider.id} className="chat-panel-strong rounded-[24px] px-5 py-5">
+                <div key={provider.id} className="rounded-lg border border-[var(--chat-line)] bg-white p-5">
                   <div className="flex flex-col gap-3 border-b border-[var(--chat-line)] pb-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[rgba(199,103,58,0.1)] text-[var(--chat-accent)]">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--chat-accent)]/10 text-[var(--chat-accent)]">
                         <span className="text-sm font-semibold">{index + 1}</span>
                       </div>
                       <div>
                         <div className="text-sm font-medium text-[var(--chat-ink)]">{provider.label || `Provider ${index + 1}`}</div>
                         <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-[var(--chat-muted)]">
                           {provider.hasStoredApiKey && (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-[var(--chat-forest-soft)] px-2 py-0.5 text-[var(--chat-forest)]">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-0.5 text-green-600">
                               <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                               </svg>
-                              Key saved
+                              Key 已保存
                             </span>
                           )}
-                          <span>{provider.models.length} models</span>
+                          <span>{provider.models.length} 个模型</span>
                         </div>
                       </div>
                     </div>
@@ -392,15 +390,15 @@ export default function AdminProvidersPage() {
                     <button
                       type="button"
                       onClick={() => setProviders((current) => current.filter((item) => item.id !== provider.id))}
-                      className="self-start rounded-full border border-red-200 bg-red-50 px-3 py-1.5 text-sm text-red-600 transition-colors hover:bg-red-100"
+                      className="self-start rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-sm text-red-600 transition-colors hover:bg-red-100"
                     >
-                      Remove
+                      删除
                     </button>
                   </div>
 
                   <div className="mt-5 grid gap-4 md:grid-cols-2">
                     <div className="space-y-1.5">
-                      <label className="text-xs font-medium uppercase tracking-wider text-[var(--chat-muted)]">Vendor name</label>
+                      <label className="text-xs font-medium text-[var(--chat-muted)]">供应商名称</label>
                       <input
                         type="text"
                         value={provider.label}
@@ -411,13 +409,13 @@ export default function AdminProvidersPage() {
                             ),
                           )
                         }
-                        className="w-full rounded-[16px] border border-[var(--chat-line)] bg-white/90 px-4 py-2.5 text-sm transition-colors outline-none focus:border-[var(--chat-accent)] focus:bg-white"
+                        className="w-full rounded-lg border border-[var(--chat-line)] bg-white px-4 py-2.5 text-sm transition-colors outline-none focus:border-[var(--chat-accent)]"
                         placeholder="OpenAI / OneAPI / Azure Proxy"
                       />
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-xs font-medium uppercase tracking-wider text-[var(--chat-muted)]">API key</label>
+                      <label className="text-xs font-medium text-[var(--chat-muted)]">API Key</label>
                       <input
                         type="password"
                         value={provider.apiKey}
@@ -428,14 +426,14 @@ export default function AdminProvidersPage() {
                             ),
                           )
                         }
-                        className="w-full rounded-[16px] border border-[var(--chat-line)] bg-white/90 px-4 py-2.5 text-sm transition-colors outline-none focus:border-[var(--chat-accent)] focus:bg-white"
-                        placeholder={provider.hasStoredApiKey ? "Leave blank to keep saved key" : "sk-..."}
+                        className="w-full rounded-lg border border-[var(--chat-line)] bg-white px-4 py-2.5 text-sm transition-colors outline-none focus:border-[var(--chat-accent)]"
+                        placeholder={provider.hasStoredApiKey ? "留空保留已保存的 key" : "sk-..."}
                         autoComplete="off"
                       />
                     </div>
 
                     <div className="space-y-1.5 md:col-span-2">
-                      <label className="text-xs font-medium uppercase tracking-wider text-[var(--chat-muted)]">Base URL</label>
+                      <label className="text-xs font-medium text-[var(--chat-muted)]">Base URL</label>
                       <input
                         type="url"
                         value={provider.baseUrl}
@@ -446,27 +444,27 @@ export default function AdminProvidersPage() {
                             ),
                           )
                         }
-                        className="w-full rounded-[16px] border border-[var(--chat-line)] bg-white/90 px-4 py-2.5 text-sm transition-colors outline-none focus:border-[var(--chat-accent)] focus:bg-white"
+                        className="w-full rounded-lg border border-[var(--chat-line)] bg-white px-4 py-2.5 text-sm transition-colors outline-none focus:border-[var(--chat-accent)]"
                         placeholder="https://api.openai.com/v1"
                       />
                       <p className="text-xs leading-5 text-[var(--chat-muted)]">
-                        支持填写根路径或 `/v1` 路径，模型同步会优先请求 `/v1/models`。
+                        支持填写根路径或 `/v1` 路径，模型同步会优先请求 `/v1/models`
                       </p>
                     </div>
                   </div>
 
-                  <div className="mt-5 rounded-[20px] border border-[var(--chat-line)] bg-white/80 p-4">
+                  <div className="mt-5 rounded-lg border border-[var(--chat-line)] bg-white p-4">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <div className="flex items-center gap-3">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[rgba(37,83,70,0.1)] text-[var(--chat-forest)]">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--chat-forest)]/10 text-[var(--chat-forest)]">
                           <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
                           </svg>
                         </div>
                         <div>
-                          <div className="text-sm font-medium text-[var(--chat-ink)]">Model catalog</div>
+                          <div className="text-sm font-medium text-[var(--chat-ink)]">模型目录</div>
                           <p className="text-xs text-[var(--chat-muted)]">
-                            {provider.models.length > 0 ? `${provider.models.length} models available` : "Sync to fetch models"}
+                            {provider.models.length > 0 ? `${provider.models.length} 个模型可用` : "点击同步获取模型"}
                           </p>
                         </div>
                       </div>
@@ -475,29 +473,29 @@ export default function AdminProvidersPage() {
                         type="button"
                         onClick={() => syncProviderModels(provider.id)}
                         disabled={provider.isFetchingModels}
-                        className="inline-flex items-center justify-center gap-2 rounded-full bg-[var(--chat-forest)] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#1f463b] disabled:cursor-not-allowed disabled:opacity-60"
+                        className="inline-flex items-center justify-center gap-2 rounded-lg bg-[var(--chat-forest)] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#1f463b] disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {provider.isFetchingModels ? (
                           <>
                             <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={4} />
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                             </svg>
-                            <span>Syncing...</span>
+                            <span>同步中...</span>
                           </>
                         ) : (
                           <>
                             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                             </svg>
-                            <span>Sync models</span>
+                            <span>同步模型</span>
                           </>
                         )}
                       </button>
                     </div>
 
                     {provider.fetchError && (
-                      <div className="mt-4 rounded-[16px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                      <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                         <div className="flex items-center gap-2">
                           <svg className="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -509,9 +507,7 @@ export default function AdminProvidersPage() {
 
                     {provider.models.length > 0 ? (
                       <div className="mt-4">
-                        <div className="mb-2 text-xs font-medium uppercase tracking-wider text-[var(--chat-muted)]">
-                          Synced models
-                        </div>
+                        <div className="mb-2 text-xs font-medium text-[var(--chat-muted)]">已同步的模型</div>
                         <div className="flex flex-wrap gap-1.5">
                           {provider.models.slice(0, 8).map((model) => (
                             <span
@@ -523,61 +519,61 @@ export default function AdminProvidersPage() {
                           ))}
                           {provider.models.length > 8 && (
                             <span className="rounded-full border border-[var(--chat-line)] bg-white/50 px-2.5 py-1 text-xs text-[var(--chat-muted)]">
-                              +{provider.models.length - 8} more
+                              +{provider.models.length - 8} 更多
                             </span>
                           )}
                         </div>
                       </div>
                     ) : (
-                      <div className="mt-4 rounded-[16px] border border-dashed border-[var(--chat-line)] bg-white/50 px-4 py-3 text-center">
-                        <p className="text-sm text-[var(--chat-muted)]">No models synced yet. Click "Sync models" to fetch available models.</p>
+                      <div className="mt-4 rounded-lg border border-dashed border-[var(--chat-line)] bg-white/50 px-4 py-3 text-center">
+                        <p className="text-sm text-[var(--chat-muted)]">还没有同步模型。点击"同步模型"获取可用模型列表</p>
                       </div>
                     )}
                   </div>
-                </article>
+                </div>
               ))}
             </div>
 
             <div className="mt-6 flex flex-col gap-3 border-t border-[var(--chat-line)] pt-5 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-[var(--chat-muted)]">保存时会把当前供应商列表写入系统配置，并立即影响 `/chat` 的模型选择。</p>
+              <p className="text-sm text-[var(--chat-muted)]">保存后会把当前供应商列表写入系统配置，并立即影响对话页面的模型选择</p>
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="inline-flex items-center justify-center rounded-full bg-[var(--chat-accent)] px-5 py-2.5 text-sm font-medium text-white hover:bg-[#b95b30] disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex items-center justify-center rounded-lg bg-[var(--chat-accent)] px-5 py-2.5 text-sm font-medium text-white hover:bg-[#b95b30] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isSubmitting ? "Saving..." : "Save settings"}
+                {isSubmitting ? "保存中..." : "保存配置"}
               </button>
             </div>
-          </section>
+          </div>
         </Form>
 
         <aside className="space-y-6">
-          <section className="chat-panel rounded-[30px] px-5 py-5 sm:px-6">
-            <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">Runtime</div>
-            <div className="mt-4 space-y-4 text-sm text-[var(--chat-ink)]">
-              <div>
-                <div className="text-[var(--chat-muted)]">Status</div>
-                <div className="mt-1 font-medium">{isConfigured ? "Ready for chat" : "Incomplete setup"}</div>
+          <div className="rounded-lg border border-[var(--chat-line)] bg-[var(--chat-panel)] p-5">
+            <div className="text-xs font-medium text-[var(--chat-muted)]">运行状态</div>
+            <div className="mt-4 space-y-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-[var(--chat-muted)]">状态</span>
+                <span className="font-medium">{isConfigured ? "就绪" : "配置不完整"}</span>
               </div>
-              <div>
-                <div className="text-[var(--chat-muted)]">Last updated</div>
-                <div className="mt-1 font-medium">{formatTimestamp(config?.updatedAt)}</div>
+              <div className="flex justify-between">
+                <span className="text-[var(--chat-muted)]">最后更新</span>
+                <span className="font-medium">{formatTimestamp(config?.updatedAt)}</span>
               </div>
-              <div>
-                <div className="text-[var(--chat-muted)]">Tracked models</div>
-                <div className="mt-1 font-medium">{totalModels}</div>
+              <div className="flex justify-between">
+                <span className="text-[var(--chat-muted)]">已追踪模型</span>
+                <span className="font-medium">{totalModels}</span>
               </div>
             </div>
-          </section>
+          </div>
 
-          <section className="chat-panel rounded-[30px] px-5 py-5 sm:px-6">
-            <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">Flow</div>
-            <div className="mt-4 space-y-3 text-sm leading-6 text-[var(--chat-muted)]">
-              <p>1. 填写供应商名称、API key 和 Base URL。</p>
-              <p>2. 点击 `Sync models` 从服务端拉取模型列表。</p>
-              <p>3. 保存后，`/chat` 会立即展示所有已同步的模型。</p>
+          <div className="rounded-lg border border-[var(--chat-line)] bg-[var(--chat-panel)] p-5">
+            <div className="text-xs font-medium text-[var(--chat-muted)]">配置流程</div>
+            <div className="mt-4 space-y-3 text-sm text-[var(--chat-muted)]">
+              <p>1. 填写供应商名称、API key 和 Base URL</p>
+              <p>2. 点击「同步模型」从服务端拉取模型列表</p>
+              <p>3. 保存后，对话页面会立即展示所有已同步的模型</p>
             </div>
-          </section>
+          </div>
         </aside>
       </div>
     </div>

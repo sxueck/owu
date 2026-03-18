@@ -13,12 +13,15 @@ export function meta({}: Route.MetaArgs) {
 export async function loader({ request }: Route.LoaderArgs) {
   const session = await getSession(request.headers.get("Cookie"));
   const { requireUser } = await import("~/lib/server/session.server");
-  const { getAvailableModels } = await import("~/lib/server/chat.server");
+  const { getAvailableModels, getUserChatPreferences } = await import("~/lib/server/chat.server");
 
-  requireUser(session);
-  const models = await getAvailableModels();
+  const user = requireUser(session);
+  const [models, preferences] = await Promise.all([
+    getAvailableModels(),
+    getUserChatPreferences(user.userId),
+  ]);
 
-  return { models };
+  return { models, preferences };
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -30,6 +33,8 @@ export async function action({ request }: Route.ActionArgs) {
   const formData = await request.formData();
   const model = formData.get("model") as string;
   const prompt = formData.get("prompt") as string;
+  const networkEnabled = formData.get("networkEnabled") as string;
+  const thinkingEnabled = formData.get("thinkingEnabled") as string;
 
   if (!model || model.trim() === "") {
     return { error: "请选择模型" };
@@ -51,6 +56,12 @@ export async function action({ request }: Route.ActionArgs) {
     const params = new URLSearchParams();
     params.set("q", encodeURIComponent(normalizedPrompt));
     params.set("model", model.trim());
+    if (networkEnabled === "true") {
+      params.set("network", "1");
+    }
+    if (thinkingEnabled === "true") {
+      params.set("thinking", "1");
+    }
 
     return redirect(`/chat/${chatSession.id}?${params.toString()}`);
   } catch (error) {
@@ -71,7 +82,7 @@ function createSubmissionKey(prompt: string, model: string): string | null {
 }
 
 export default function ChatIndexPage() {
-  const { models } = useLoaderData<typeof loader>();
+  const { models, preferences } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state === "submitting";
@@ -89,10 +100,29 @@ export default function ChatIndexPage() {
   const [selectedModel, setSelectedModel] = useState(getInitialModel);
   const [prompt, setPrompt] = useState("");
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
+  const [networkEnabled, setNetworkEnabled] = useState(preferences.chatNetworkEnabled);
+  const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const submitLockRef = useRef<string | null>(null);
-  const activeModel = models.find((model) => model.id === selectedModel) ?? models[0];
+  const activeModel = models.find((model: { id: string }) => model.id === selectedModel) ?? models[0];
+
+  // Persist network preference when toggled
+  const handleNetworkToggle = useCallback(async (enabled: boolean) => {
+    setNetworkEnabled(enabled);
+    try {
+      const response = await fetch("/api/preferences/network", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatNetworkEnabled: enabled }),
+      });
+      if (!response.ok) {
+        console.warn("Failed to persist network preference");
+      }
+    } catch (err) {
+      console.warn("Failed to persist network preference:", err);
+    }
+  }, []);
 
   useEffect(() => {
     if (navigation.state === "idle") {
@@ -170,12 +200,14 @@ export default function ChatIndexPage() {
                       开始对话
                     </h1>
                     <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-[var(--chat-muted)] sm:text-[15px]">
-                      提问题、做分析、审代码，或者整理思路。
+                      提问题、做分析、审代码，或者整理思路
                     </p>
                   </div>
 
                   <Form method="post" className="mt-10" onSubmit={handleSubmit}>
                     <input type="hidden" name="model" value={selectedModel} />
+                    <input type="hidden" name="networkEnabled" value={networkEnabled.toString()} />
+                    <input type="hidden" name="thinkingEnabled" value={thinkingEnabled.toString()} />
 
                     {actionData?.error && (
                       <div className="mb-3 rounded-[20px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -208,14 +240,49 @@ export default function ChatIndexPage() {
                       />
 
                       <div className="mt-2 flex items-center justify-between">
-                        <div ref={modelMenuRef} className="relative">
+                        <div className="flex items-center gap-3">
                           <button
                             type="button"
-                            onClick={() => setIsModelMenuOpen((open) => !open)}
-                            className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-[var(--chat-muted)] transition-colors hover:bg-[rgba(20,33,28,0.04)] hover:text-[var(--chat-ink)]"
-                            aria-haspopup="listbox"
-                            aria-expanded={isModelMenuOpen}
+                            onClick={() => handleNetworkToggle(!networkEnabled)}
+                            disabled={isSubmitting}
+                            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60 ${
+                              networkEnabled
+                                ? "border-[var(--chat-accent)] bg-[rgba(199,103,58,0.1)] text-[var(--chat-accent)]"
+                                : "border-[var(--chat-line)] bg-gray-50 text-[var(--chat-muted)] hover:border-gray-300"
+                            }`}
+                            title={networkEnabled ? "联网搜索已启用" : "联网搜索已禁用"}
                           >
+                            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+                            </svg>
+                            <span>{networkEnabled ? "Online" : "Offline"}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setThinkingEnabled(!thinkingEnabled)}
+                            disabled={isSubmitting}
+                            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60 ${
+                              thinkingEnabled
+                                ? "border-purple-500 bg-purple-50 text-purple-600"
+                                : "border-[var(--chat-line)] bg-gray-50 text-[var(--chat-muted)] hover:border-gray-300"
+                            }`}
+                            title={thinkingEnabled ? "思考模式已启用" : "思考模式已禁用"}
+                          >
+                            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m12.728 0l-.707.707M12 21v-1M7.05 16.95l-.707.707M16.95 16.95l-.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z" />
+                            </svg>
+                            <span>{thinkingEnabled ? "Think" : "No Think"}</span>
+                          </button>
+
+                          <div ref={modelMenuRef} className="relative">
+                            <button
+                              type="button"
+                              onClick={() => setIsModelMenuOpen((open) => !open)}
+                              className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-[var(--chat-muted)] transition-colors hover:bg-[rgba(20,33,28,0.04)] hover:text-[var(--chat-ink)]"
+                              aria-haspopup="listbox"
+                              aria-expanded={isModelMenuOpen}
+                            >
                             <span className="max-w-[140px] truncate">{activeModel?.label ?? selectedModel}</span>
                             <svg
                               className={[
@@ -265,6 +332,7 @@ export default function ChatIndexPage() {
                               </div>
                             </div>
                           ) : null}
+                          </div>
                         </div>
 
                         <button

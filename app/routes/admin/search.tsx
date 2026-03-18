@@ -63,7 +63,6 @@ export async function action({ request }: Route.ActionArgs): Promise<ActionData>
   const baseUrl = formData.get("baseUrl") as string;
   const defaultResultCount = parseInt(formData.get("defaultResultCount") as string, 10) || 5;
 
-  // Get existing API key if not provided (retain stored key)
   const currentConfig = await getSystemConfig();
   const existingApiKey = currentConfig?.searchConfig?.apiKey;
 
@@ -78,10 +77,11 @@ export async function action({ request }: Route.ActionArgs): Promise<ActionData>
     await saveSystemConfig({
       searchConfig: {
         enabled,
-        apiKey: apiKey || undefined, // Only pass new key if provided
+        apiKey: apiKey || undefined,
         baseUrl: values.baseUrl,
         defaultResultCount: values.defaultResultCount,
       },
+      allowEmptyProviders: true,
       updatedBy: admin.userId,
     });
 
@@ -106,71 +106,69 @@ export default function AdminSearchPage() {
   const [defaultResultCount, setDefaultResultCount] = useState(searchConfig.defaultResultCount);
 
   return (
-    <div className="space-y-6 text-[var(--chat-ink)]">
-      <section className="chat-panel relative overflow-hidden rounded-[30px] px-6 py-6 sm:px-8 sm:py-7">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(199,103,58,0.14),transparent_32%),radial-gradient(circle_at_bottom_left,rgba(37,83,70,0.12),transparent_28%)]" />
-        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div className="max-w-2xl">
-            <div className="inline-flex items-center gap-2 rounded-full border border-[var(--chat-line)] bg-white/70 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">
-              <span className="h-2 w-2 rounded-full bg-[var(--chat-accent)]" />
-              Search Console
+    <div className="space-y-8 text-[var(--chat-ink)]">
+      {/* Header Section */}
+      <div className="border-b border-[var(--chat-line)] pb-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-sm text-purple-600">
+              <span className="h-2 w-2 rounded-full bg-purple-600" />
+              搜索配置
             </div>
-            <h1 className="mt-4 font-serif text-3xl tracking-[-0.03em] sm:text-4xl">Network search configuration</h1>
-            <p className="mt-3 max-w-xl text-sm leading-7 text-[var(--chat-muted)] sm:text-base">
-              配置 Exa 联网搜索，让 AI 可以获取最新信息
-            </p>
+            <h1 className="mt-3 text-3xl font-semibold tracking-tight">联网搜索配置</h1>
+            <p className="mt-2 text-[var(--chat-muted)]">配置 Exa 联网搜索，让 AI 可以获取最新信息</p>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[240px]">
-            <div className="chat-panel-strong rounded-[22px] px-4 py-4">
-              <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">Status</div>
-              <div className="mt-2 text-2xl font-semibold">{searchConfig.isConfigured ? "Ready" : "Setup Required"}</div>
+          <div className="flex gap-3">
+            <div className="rounded-lg border border-[var(--chat-line)] bg-[var(--chat-panel)] px-4 py-3">
+              <div className="text-xs text-[var(--chat-muted)]">状态</div>
+              <div className="text-xl font-semibold">{searchConfig.isConfigured ? "就绪" : "需配置"}</div>
             </div>
-            <div className="chat-panel-strong rounded-[22px] px-4 py-4">
-              <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">Default Results</div>
-              <div className="mt-2 text-2xl font-semibold">{searchConfig.defaultResultCount}</div>
+            <div className="rounded-lg border border-[var(--chat-line)] bg-[var(--chat-panel)] px-4 py-3">
+              <div className="text-xs text-[var(--chat-muted)]">默认结果</div>
+              <div className="text-xl font-semibold">{searchConfig.defaultResultCount}</div>
             </div>
           </div>
         </div>
-      </section>
+      </div>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_280px]">
         <Form method="post" className="space-y-6">
           {actionData?.success && (
-            <div className="rounded-[24px] border border-[rgba(37,83,70,0.2)] bg-[rgba(37,83,70,0.1)] px-5 py-4 text-sm text-[var(--chat-ink)]">
-              Configuration saved successfully.
+            <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+              配置保存成功
             </div>
           )}
 
           {actionData?.error && (
-            <div className="rounded-[24px] border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {actionData.error}
             </div>
           )}
 
-          <section className="chat-panel rounded-[30px] px-5 py-5 sm:px-6 sm:py-6">
+          <div className="rounded-lg border border-[var(--chat-line)] bg-[var(--chat-panel)] p-5">
             <div className="flex flex-col gap-4 border-b border-[var(--chat-line)] pb-5">
               <div>
-                <h2 className="font-serif text-xl tracking-[-0.02em]">Exa Search</h2>
-                <p className="mt-1.5 text-sm leading-6 text-[var(--chat-muted)]">
-                  Configure Exa API for network search capabilities in chat.
+                <h2 className="text-lg font-medium">Exa 搜索</h2>
+                <p className="mt-1 text-sm text-[var(--chat-muted)]">
+                  配置 Exa API 以在对话中启用联网搜索功能
                 </p>
               </div>
             </div>
 
             <div className="mt-6 space-y-6">
               {/* Enable toggle */}
-              <div className="flex items-center justify-between rounded-[20px] border border-[var(--chat-line)] bg-white/80 p-4">
+              <div className="flex items-center justify-between rounded-lg border border-[var(--chat-line)] bg-white p-4">
                 <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[rgba(199,103,58,0.1)] text-[var(--chat-accent)]">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-500/10 text-purple-600">
                     <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                     </svg>
                   </div>
                   <div>
-                    <div className="text-sm font-medium text-[var(--chat-ink)]">Enable network search</div>
+                    <div className="text-sm font-medium text-[var(--chat-ink)]">启用联网搜索</div>
                     <p className="text-xs text-[var(--chat-muted)]">
-                      Allow AI to search the web for up-to-date information
+                      允许 AI 搜索网络获取最新信息
                     </p>
                   </div>
                 </div>
@@ -182,20 +180,20 @@ export default function AdminSearchPage() {
                     onChange={(e) => setEnabled(e.target.checked)}
                     className="peer sr-only"
                   />
-                  <div className="h-6 w-11 rounded-full bg-gray-200 peer-checked:bg-[var(--chat-accent)] peer-focus:ring-2 peer-focus:ring-[var(--chat-accent)]/20 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-transform after:content-[''] peer-checked:after:translate-x-5" />
+                  <div className="h-6 w-11 rounded-full bg-gray-200 peer-checked:bg-purple-600 peer-focus:ring-2 peer-focus:ring-purple-600/20 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-transform after:content-[''] peer-checked:after:translate-x-5" />
                 </label>
               </div>
 
               {/* API Key */}
               <div className="space-y-1.5">
-                <label className="text-xs font-medium uppercase tracking-wider text-[var(--chat-muted)]">
+                <label className="text-xs font-medium text-[var(--chat-muted)]">
                   Exa API Key
                   {searchConfig.apiKeyPresent && (
-                    <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-[var(--chat-forest-soft)] px-2 py-0.5 text-[10px] text-[var(--chat-forest)]">
+                    <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-0.5 text-[10px] text-green-600">
                       <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                       </svg>
-                      Saved
+                      已保存
                     </span>
                   )}
                 </label>
@@ -204,26 +202,27 @@ export default function AdminSearchPage() {
                   name="apiKey"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  className="w-full rounded-[16px] border border-[var(--chat-line)] bg-white/90 px-4 py-2.5 text-sm transition-colors outline-none focus:border-[var(--chat-accent)] focus:bg-white"
-                  placeholder={searchConfig.apiKeyPresent ? "Leave blank to keep saved key" : "exa-..."}
+                  className="w-full rounded-lg border border-[var(--chat-line)] bg-white px-4 py-2.5 text-sm transition-colors outline-none focus:border-purple-600"
+                  placeholder={searchConfig.apiKeyPresent ? "留空保留已保存的 key" : "exa-..."}
                   autoComplete="off"
                 />
-                <p className="text-xs leading-5 text-[var(--chat-muted)]">
-                  Get your API key from{" "}
+                <p className="text-xs text-[var(--chat-muted)]">
+                  从{" "}
                   <a
                     href="https://exa.ai"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[var(--chat-accent)] hover:underline"
+                    className="text-purple-600 hover:underline"
                   >
                     exa.ai
-                  </a>
+                  </a>{" "}
+                  获取你的 API key
                 </p>
               </div>
 
               {/* Base URL */}
               <div className="space-y-1.5">
-                <label className="text-xs font-medium uppercase tracking-wider text-[var(--chat-muted)]">
+                <label className="text-xs font-medium text-[var(--chat-muted)]">
                   Base URL
                 </label>
                 <input
@@ -231,18 +230,18 @@ export default function AdminSearchPage() {
                   name="baseUrl"
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
-                  className="w-full rounded-[16px] border border-[var(--chat-line)] bg-white/90 px-4 py-2.5 text-sm transition-colors outline-none focus:border-[var(--chat-accent)] focus:bg-white"
+                  className="w-full rounded-lg border border-[var(--chat-line)] bg-white px-4 py-2.5 text-sm transition-colors outline-none focus:border-purple-600"
                   placeholder="https://api.exa.ai"
                 />
-                <p className="text-xs leading-5 text-[var(--chat-muted)]">
-                  Exa API endpoint (defaults to https://api.exa.ai)
+                <p className="text-xs text-[var(--chat-muted)]">
+                  Exa API 端点（默认为 https://api.exa.ai）
                 </p>
               </div>
 
               {/* Default Result Count */}
               <div className="space-y-1.5">
-                <label className="text-xs font-medium uppercase tracking-wider text-[var(--chat-muted)]">
-                  Default Result Count
+                <label className="text-xs font-medium text-[var(--chat-muted)]">
+                  默认结果数量
                 </label>
                 <input
                   type="number"
@@ -251,57 +250,57 @@ export default function AdminSearchPage() {
                   max={20}
                   value={defaultResultCount}
                   onChange={(e) => setDefaultResultCount(Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 5)))}
-                  className="w-full rounded-[16px] border border-[var(--chat-line)] bg-white/90 px-4 py-2.5 text-sm transition-colors outline-none focus:border-[var(--chat-accent)] focus:bg-white"
+                  className="w-full rounded-lg border border-[var(--chat-line)] bg-white px-4 py-2.5 text-sm transition-colors outline-none focus:border-purple-600"
                 />
-                <p className="text-xs leading-5 text-[var(--chat-muted)]">
-                  Number of search results to include (1-20, default: 5)
+                <p className="text-xs text-[var(--chat-muted)]">
+                  搜索结果数量（1-20，默认：5）
                 </p>
               </div>
             </div>
 
             <div className="mt-6 flex flex-col gap-3 border-t border-[var(--chat-line)] pt-5 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-[var(--chat-muted)]">
-                保存后，用户在 /chat 中可以选择启用联网搜索功能。
+                保存后，用户在对话页面会看到联网搜索开关
               </p>
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="inline-flex items-center justify-center rounded-full bg-[var(--chat-accent)] px-5 py-2.5 text-sm font-medium text-white hover:bg-[#b95b30] disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex items-center justify-center rounded-lg bg-purple-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isSubmitting ? "Saving..." : "Save settings"}
+                {isSubmitting ? "保存中..." : "保存配置"}
               </button>
             </div>
-          </section>
+          </div>
         </Form>
 
         <aside className="space-y-6">
-          <section className="chat-panel rounded-[30px] px-5 py-5 sm:px-6">
-            <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">Status</div>
-            <div className="mt-4 space-y-4 text-sm text-[var(--chat-ink)]">
-              <div>
-                <div className="text-[var(--chat-muted)]">Configuration</div>
-                <div className="mt-1 font-medium">{searchConfig.isConfigured ? "Ready" : "Missing API Key"}</div>
+          <div className="rounded-lg border border-[var(--chat-line)] bg-[var(--chat-panel)] p-5">
+            <div className="text-xs font-medium text-[var(--chat-muted)]">状态</div>
+            <div className="mt-4 space-y-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-[var(--chat-muted)]">配置状态</span>
+                <span className="font-medium">{searchConfig.isConfigured ? "就绪" : "缺少 API Key"}</span>
               </div>
-              <div>
-                <div className="text-[var(--chat-muted)]">Enabled</div>
-                <div className="mt-1 font-medium">{searchConfig.enabled ? "Yes" : "No"}</div>
+              <div className="flex justify-between">
+                <span className="text-[var(--chat-muted)]">已启用</span>
+                <span className="font-medium">{searchConfig.enabled ? "是" : "否"}</span>
               </div>
-              <div>
-                <div className="text-[var(--chat-muted)]">Default Results</div>
-                <div className="mt-1 font-medium">{searchConfig.defaultResultCount}</div>
+              <div className="flex justify-between">
+                <span className="text-[var(--chat-muted)]">默认结果</span>
+                <span className="font-medium">{searchConfig.defaultResultCount}</span>
               </div>
             </div>
-          </section>
+          </div>
 
-          <section className="chat-panel rounded-[30px] px-5 py-5 sm:px-6">
-            <div className="text-[11px] uppercase tracking-[0.24em] text-[var(--chat-muted)]">How it works</div>
-            <div className="mt-4 space-y-3 text-sm leading-6 text-[var(--chat-muted)]">
-              <p>1. 获取 Exa API key 并在此配置。</p>
-              <p>2. 开启联网搜索开关。</p>
-              <p>3. 用户在 /chat 页面会看到网络搜索开关。</p>
-              <p>4. 开启后，AI 会在需要时自动调用搜索工具。</p>
+          <div className="rounded-lg border border-[var(--chat-line)] bg-[var(--chat-panel)] p-5">
+            <div className="text-xs font-medium text-[var(--chat-muted)]">工作流程</div>
+            <div className="mt-4 space-y-3 text-sm text-[var(--chat-muted)]">
+              <p>1. 获取 Exa API key 并在此配置</p>
+              <p>2. 开启联网搜索开关</p>
+              <p>3. 用户在对话页面会看到网络搜索开关</p>
+              <p>4. 开启后，AI 会在需要时自动调用搜索工具</p>
             </div>
-          </section>
+          </div>
         </aside>
       </div>
     </div>

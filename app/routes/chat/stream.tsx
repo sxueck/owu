@@ -11,9 +11,19 @@ import { getSession } from "~/sessions";
  */
 type SSEEvent =
   | { type: "start"; sessionId: string; model: string }
+  | { type: "tool-status"; message: string }
   | { type: "token"; content: string }
   | { type: "reasoning"; content: string }
-  | { type: "complete"; messageId: string; content: string }
+  | {
+      type: "complete";
+      messageId: string;
+      content: string;
+      usage?: {
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+      };
+    }
   | { type: "suggestions"; messageId: string; questions: string[] }
   | { type: "notice"; level: "info" | "warning"; message: string }
   | { type: "error"; message: string };
@@ -62,6 +72,7 @@ export async function action({ request, params }: Route.ActionArgs) {
   let intent: "send" | "edit-last-user" | "regenerate-last-assistant" = "send";
   let messageId: string | undefined;
   let networkEnabled: boolean | undefined;
+  let thinking: { type: "enabled" | "disabled" } | undefined;
   try {
     const body = await request.json();
     content = typeof body.content === "string" ? body.content : undefined;
@@ -71,6 +82,12 @@ export async function action({ request, params }: Route.ActionArgs) {
       : "send";
     messageId = typeof body.messageId === "string" ? body.messageId : undefined;
     networkEnabled = typeof body.networkEnabled === "boolean" ? body.networkEnabled : undefined;
+    // Convert boolean thinkingEnabled from client to proper format
+    if (body.thinkingEnabled === true) {
+      thinking = { type: "enabled" };
+    } else if (body.thinkingEnabled === false) {
+      thinking = { type: "disabled" };
+    }
 
     if ((intent === "send" || intent === "edit-last-user") && (!content || content.trim() === "")) {
       return new Response("Message content is required", { status: 400 });
@@ -94,6 +111,7 @@ export async function action({ request, params }: Route.ActionArgs) {
             intent,
             messageId,
             networkEnabled,
+            thinking,
           },
           async (event) => {
             const sseData = serializeSSE(event);

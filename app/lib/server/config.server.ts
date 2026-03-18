@@ -817,27 +817,34 @@ export interface SaveSystemConfigInput {
   allowedModels?: string[];
   mcpServers?: MCPServerDraftInput[];
   searchConfig?: SearchConfigInput;
+  allowEmptyProviders?: boolean;
   updatedBy?: string | null;
 }
 
 export async function saveSystemConfig(input: SaveSystemConfigInput): Promise<SystemConfigData> {
   const currentConfig = await getSystemConfig();
-  const providers = input.providers
+  const shouldUpdateProviders = input.providers !== undefined
+    || input.openaiApiKey !== undefined
+    || input.openaiBaseUrl !== undefined
+    || input.allowedModels !== undefined;
+  const providers = input.providers !== undefined
     ? normalizeProviderDrafts(input.providers, currentConfig?.providers ?? [])
-    : normalizeProviderDrafts(
-        [
-          {
-            id: LEGACY_PROVIDER_ID,
-            label: "Primary Provider",
-            apiKey: input.openaiApiKey,
-            baseUrl: input.openaiBaseUrl,
-            models: input.allowedModels,
-          },
-        ],
-        currentConfig?.providers ?? [],
-      );
+    : shouldUpdateProviders
+      ? normalizeProviderDrafts(
+          [
+            {
+              id: LEGACY_PROVIDER_ID,
+              label: "Primary Provider",
+              apiKey: input.openaiApiKey,
+              baseUrl: input.openaiBaseUrl,
+              models: input.allowedModels,
+            },
+          ],
+          currentConfig?.providers ?? [],
+        )
+      : currentConfig?.providers ?? [];
 
-  if (providers.length === 0) {
+  if (providers.length === 0 && !input.allowEmptyProviders) {
     throw new Error("At least one provider is required.");
   }
 
@@ -875,17 +882,17 @@ export async function saveSystemConfig(input: SaveSystemConfigInput): Promise<Sy
         isConfigured: false,
       };
 
-  const primaryProvider = providers[0];
+  const primaryProvider = providers[0] ?? null;
   const updateData: {
-    openaiApiKey: string;
+    openaiApiKey: string | null;
     openaiBaseUrl: string | null;
     allowedModels: Prisma.InputJsonValue;
     mcpServers: Prisma.InputJsonValue;
     searchConfig: Prisma.InputJsonValue;
     updatedBy?: string | null;
   } = {
-    openaiApiKey: primaryProvider.apiKey,
-    openaiBaseUrl: primaryProvider.baseUrl,
+    openaiApiKey: primaryProvider?.apiKey ?? null,
+    openaiBaseUrl: primaryProvider?.baseUrl ?? null,
     allowedModels: serializeProviders(providers),
     mcpServers: serializeMCPServers(mcpServers),
     searchConfig: serializeSearchConfig(searchConfig),

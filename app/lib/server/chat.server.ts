@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from './db.server';
+import { getUserById } from './auth.server';
 import {
   sendChatCompletion,
   sendChatCompletionWithToolCalls,
@@ -7,6 +8,7 @@ import {
   type ChatCompletionMessage,
   type ToolResultMessage,
   type AssistantMessageWithToolCalls,
+  type AssistantToolCall,
   type ChatCompletionResult,
   type ChatCompletionOptions,
   type ChatCompletionTool,
@@ -22,6 +24,7 @@ import { assertChatSessionOwnership } from './ownership.server';
 import type { SessionData } from './session.server';
 import { isExaConfigured, executeExaSearch, formatExaResultsForToolResponse } from './exa.server';
 import { getUserChatPreferences } from './preferences.server';
+export { getUserChatPreferences };
 
 /**
  * Exa search tool definition for OpenAI tool calling
@@ -69,6 +72,7 @@ export interface SendMessageInput {
   intent?: 'send' | 'edit-last-user' | 'regenerate-last-assistant';
   messageId?: string;
   networkEnabled?: boolean;
+  thinking?: { type: "enabled" | "disabled" };
 }
 
 export interface ChatMessageOutput {
@@ -267,6 +271,11 @@ export async function createChatSession(
   user: SessionData,
   input: CreateChatSessionInput
 ): Promise<{ id: string; title: string; model: string; createdAt: Date }> {
+  const existingUser = await getUserById(user.userId);
+  if (!existingUser) {
+    throw new Error('当前登录状态对应的用户不存在，请重新登录后再试。');
+  }
+
   // Validate model is allowed
   const resolvedModel = await resolveModelReference(input.model);
   if (!resolvedModel) {
@@ -507,9 +516,19 @@ export async function getChatSessionMeta(
  */
 export type SSEEvent =
   | { type: 'start'; sessionId: string; model: string }
+  | { type: 'tool-status'; message: string }
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
-  | { type: 'complete'; messageId: string; content: string }
+  | {
+      type: 'complete';
+      messageId: string;
+      content: string;
+      usage?: {
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+      };
+    }
   | { type: 'suggestions'; messageId: string; questions: string[] }
   | { type: 'notice'; level: 'info' | 'warning'; message: string }
   | { type: 'error'; message: string };
@@ -576,7 +595,6 @@ async function generateFollowUpQuestions(
       model: modelConfig.model,
       provider: modelConfig.provider,
       messages: contextMessages,
-      temperature: 1,
       maxTokens: 500,
     });
 
@@ -603,6 +621,108 @@ async function resolveNetworkEnabled(
   // Otherwise fall back to user preferences (defaults to true)
   const preferences = await getUserChatPreferences(userId);
   return preferences.chatNetworkEnabled;
+}
+
+function buildNetworkSearchSystemPrompt(now: Date): string {
+  const nowIso = now.toISOString();
+  const nowLocal = now.toLocaleString('zh-CN', { hour12: false });
+
+  const lines = [
+    'You are a precise assistant with web-search capability.',
+    '',
+    `Current time (UTC): ${nowIso}`,
+    `Current server local time: ${nowLocal}`,
+    '',
+    'Available tool:',
+    '- exa_search(query: string): Search the web for up-to-date information.',
+    '',
+    'Decision policy:',
+    '1. Decide first whether the question requires fresh information (for example: latest versions, news, policy, pricing, or real-time status).',
+    '2. If the user asks for latest/current/recent/time-sensitive facts, call exa_search before answering.',
+    '3. Call exa_search only when fresh information is required; otherwise answer directly without tool usage.',
+    '4. After calling the tool, synthesize an answer from the retrieved evidence and include source URLs.',
+    '5. Never claim you searched or cite external sources unless they come from actual tool results in this turn.',
+    '6. If evidence is insufficient or conflicting, say what is uncertain and avoid guessing.',
+    '7. Never output tool-call tags, DSML/XML markers, or intermediate tool protocol text in the final answer.',
+    '',
+    'Answering requirements:',
+    '- Lead with a direct answer, then provide key evidence.',
+    '- If confidence is limited, state uncertainty clearly and include the relevant time scope.',
+  ];
+
+  return lines.join('\n');
+}
+
+function prependNetworkSearchPrompt(messages: ChatCompletionMessage[]): ChatCompletionMessage[] {
+  return [
+    {
+      role: 'system',
+      content: buildNetworkSearchSystemPrompt(new Date()),
+    },
+    ...messages,
+  ];
+}
+
+function buildPostToolSynthesisSystemPrompt(): string {
+  return [
+    'You are a precise assistant finishing a response after web search has already been completed.',
+    'The search step is done. Do not call any tools again.',
+    'Use the provided tool results as evidence to answer the user\'s question directly.',
+    'Include the most relevant source URLs in the answer when available.',
+    'Never output tool-call tags, DSML/XML markers, or intermediate tool protocol text.',
+    'If the evidence is insufficient, say what is uncertain instead of guessing.',
+  ].join('\n');
+}
+
+function prependPostToolSynthesisPrompt(messages: ChatCompletionMessage[]): ChatCompletionMessage[] {
+  return [
+    {
+      role: 'system',
+      content: buildPostToolSynthesisSystemPrompt(),
+    },
+    ...messages,
+  ];
+}
+
+function buildPromptBasedToolContextMessage(
+  toolCalls: AssistantToolCall[],
+  toolResults: ToolResultMessage[]
+): ChatCompletionMessage {
+  const contexts = toolCalls.map((toolCall, index) => {
+    const toolResult = toolResults[index]?.content ?? 'No tool output';
+    return [
+      `Tool #${index + 1}: ${toolCall.function.name}`,
+      `Arguments: ${toolCall.function.arguments}`,
+      'Result:',
+      toolResult,
+    ].join('\n');
+  });
+
+  return {
+    role: 'system',
+    content: [
+      'Here are the web-search results you requested.',
+      'Continue answering the user\'s previous question using this evidence.',
+      'Requirements: be concise, lead with the conclusion, and include key source URLs. Do not output tool-call tags.',
+      '',
+      ...contexts,
+    ].join('\n\n'),
+  };
+}
+
+function buildToolResultFallbackContent(toolResults: ToolResultMessage[]): string {
+  const renderedResults = toolResults.map((toolResult) => toolResult.content.trim()).filter(Boolean).join('\n\n');
+
+  if (!renderedResults) {
+    return 'I completed the web search, but no final summary was generated.';
+  }
+
+  return [
+    'I completed the web search, but the model did not produce a final summary.',
+    'Here are the retrieved results:',
+    '',
+    renderedResults,
+  ].join('\n');
 }
 
 /**
@@ -705,7 +825,8 @@ export async function sendMessageStream(
         messages,
         pendingMutation,
         searchConfig!,
-        onEvent
+        onEvent,
+        input.thinking
       );
     } else {
       // Normal flow without tools
@@ -714,7 +835,9 @@ export async function sendMessageStream(
         resolvedModel,
         messages,
         pendingMutation,
-        onEvent
+        onEvent,
+        undefined,
+        input.thinking
       );
     }
   } catch (error) {
@@ -733,13 +856,20 @@ async function executeNormalFlow(
   resolvedModel: NonNullable<Awaited<ReturnType<typeof resolveModelReference>>>,
   messages: ChatCompletionMessage[],
   pendingMutation: PendingTurnMutation,
-  onEvent: (event: SSEEvent) => void | Promise<void>
+  onEvent: (event: SSEEvent) => void | Promise<void>,
+  prelude?: {
+    content?: string | null;
+    reasoning?: string | null;
+  },
+  thinking?: { type: "enabled" | "disabled" },
+  usagePrefix?: ChatCompletionResult['usage']
 ): Promise<void> {
   await executeStreamCompletion(
     {
       model: resolvedModel.model,
       provider: resolvedModel.provider,
       messages,
+      thinking,
     },
     {
       onToken: async (token: string) => {
@@ -749,11 +879,19 @@ async function executeNormalFlow(
         await onEvent({ type: 'reasoning', content });
       },
       onComplete: async (result: ChatCompletionResult) => {
+        const mergedContent = mergeAssistantSegments(prelude?.content, result.content, '\n\n') ?? '';
+        const mergedReasoning = mergeAssistantSegments(prelude?.reasoning, result.reasoning, '\n\n');
+
         await finalizeAssistantMessage(
           sessionId,
           resolvedModel,
           pendingMutation,
-          result,
+          {
+            ...result,
+            content: mergedContent,
+            reasoning: mergedReasoning,
+            usage: mergeTokenUsage(usagePrefix, result.usage),
+          },
           messages,
           onEvent
         );
@@ -763,6 +901,76 @@ async function executeNormalFlow(
       },
     }
   );
+}
+
+function mergeAssistantSegments(
+  prefix: string | null | undefined,
+  suffix: string | null | undefined,
+  separator: string
+): string | undefined {
+  const normalizedPrefix = prefix?.trim();
+  const normalizedSuffix = suffix?.trim();
+
+  if (!normalizedPrefix && !normalizedSuffix) {
+    return undefined;
+  }
+
+  if (!normalizedPrefix) {
+    return normalizedSuffix;
+  }
+
+  if (!normalizedSuffix) {
+    return normalizedPrefix;
+  }
+
+  if (normalizedSuffix.startsWith(normalizedPrefix)) {
+    return normalizedSuffix;
+  }
+
+  if (normalizedPrefix.startsWith(normalizedSuffix)) {
+    return normalizedPrefix;
+  }
+
+  return `${normalizedPrefix}${separator}${normalizedSuffix}`;
+}
+
+function mergeTokenUsage(
+  ...usages: Array<ChatCompletionResult['usage'] | undefined>
+): ChatCompletionResult['usage'] | undefined {
+  let promptTokens = 0;
+  let completionTokens = 0;
+  let totalTokens = 0;
+  let hasAnyUsage = false;
+
+  for (const usage of usages) {
+    if (!usage) {
+      continue;
+    }
+
+    promptTokens += usage.promptTokens;
+    completionTokens += usage.completionTokens;
+    totalTokens += usage.totalTokens;
+    hasAnyUsage = true;
+  }
+
+  return hasAnyUsage
+    ? {
+        promptTokens,
+        completionTokens,
+        totalTokens,
+      }
+    : undefined;
+}
+
+function stripContentToolMarkup(content: string | null | undefined): string {
+  if (!content) {
+    return '';
+  }
+
+  return content
+    .replace(/<[|\uFF5C]DSML[|\uFF5C]invoke\s+name=["'][^"']+["']\s*>[\s\S]*?<\/[|\uFF5C]DSML[|\uFF5C]invoke>/gi, '')
+    .replace(/<invoke\s+name=["'][^"']+["']\s*>[\s\S]*?<\/invoke>/gi, '')
+    .trim();
 }
 
 /**
@@ -779,15 +987,20 @@ async function executeToolCallingFlow(
   messages: ChatCompletionMessage[],
   pendingMutation: PendingTurnMutation,
   searchConfig: SearchConfig,
-  onEvent: (event: SSEEvent) => void | Promise<void>
+  onEvent: (event: SSEEvent) => void | Promise<void>,
+  thinking?: { type: "enabled" | "disabled" }
 ): Promise<void> {
+  const messagesWithNetworkPrompt = prependNetworkSearchPrompt(messages);
+  const messagesWithSynthesisPrompt = prependPostToolSynthesisPrompt(messages);
+
   try {
     // First non-streaming call with tools to discover tool_calls
     const firstResponse = await sendChatCompletionWithToolCalls({
       model: resolvedModel.model,
       provider: resolvedModel.provider,
-      messages,
+      messages: messagesWithNetworkPrompt,
       tools: [EXA_SEARCH_TOOL],
+      thinking,
     });
 
     // If no tool calls, stream the final answer directly
@@ -809,11 +1022,16 @@ async function executeToolCallingFlow(
           reasoning: firstResponse.reasoning,
           usage: firstResponse.usage,
         },
-        messages,
+        messagesWithNetworkPrompt,
         onEvent
       );
       return;
     }
+
+    const preToolContent = firstResponse.toolCallSource === 'content'
+      ? stripContentToolMarkup(firstResponse.content)
+      : (firstResponse.content ?? '');
+    const preToolReasoning = firstResponse.reasoning ?? '';
 
     // Filter for supported tool calls (only exa_search)
     const supportedToolCalls = firstResponse.toolCalls.filter(
@@ -822,8 +1040,8 @@ async function executeToolCallingFlow(
 
     // If no supported tool calls, treat as normal response
     if (supportedToolCalls.length === 0) {
-      if (firstResponse.content) {
-        await onEvent({ type: 'token', content: firstResponse.content });
+      if (preToolContent) {
+        await onEvent({ type: 'token', content: preToolContent });
       }
       if (firstResponse.reasoning) {
         await onEvent({ type: 'reasoning', content: firstResponse.reasoning });
@@ -833,12 +1051,12 @@ async function executeToolCallingFlow(
         resolvedModel,
         pendingMutation,
         {
-          content: firstResponse.content || '',
+          content: preToolContent,
           model: firstResponse.model,
           reasoning: firstResponse.reasoning,
           usage: firstResponse.usage,
         },
-        messages,
+        messagesWithNetworkPrompt,
         onEvent
       );
       return;
@@ -846,11 +1064,20 @@ async function executeToolCallingFlow(
 
     // Execute supported tool calls
     const toolResults: ToolResultMessage[] = [];
+    await onEvent({
+      type: 'tool-status',
+      message: '正在联网搜索最新资料...',
+    });
     
     for (const toolCall of supportedToolCalls) {
       try {
-        const args = JSON.parse(toolCall.function.arguments) as { query: string };
-        const searchResponse = await executeExaSearch(args.query, searchConfig);
+        const args = JSON.parse(toolCall.function.arguments) as { query?: string };
+        const query = args.query?.trim();
+        if (!query) {
+          throw new Error('Tool call is missing required argument: query');
+        }
+
+        const searchResponse = await executeExaSearch(query, searchConfig);
         const toolResult = formatExaResultsForToolResponse(searchResponse);
         
         toolResults.push({
@@ -861,40 +1088,77 @@ async function executeToolCallingFlow(
       } catch (toolError) {
         // Tool execution failed - send notice and fall back to normal completion
         const errorMessage = toolError instanceof Error ? toolError.message : 'Unknown error';
+        console.error('Exa search tool execution failed:', {
+          toolCallId: toolCall.id,
+          toolName: toolCall.function.name,
+          toolArguments: toolCall.function.arguments,
+          error: toolError,
+        });
         await onEvent({
           type: 'notice',
           level: 'warning',
           message: `Search failed: ${errorMessage}. Continuing with normal response.`,
         });
-        
+
         // Fall back to normal completion without tools
-        await executeNormalFlow(sessionId, resolvedModel, messages, pendingMutation, onEvent);
+        await executeNormalFlow(
+          sessionId,
+          resolvedModel,
+          messages,
+          pendingMutation,
+          onEvent,
+          undefined,
+          thinking,
+          firstResponse.usage
+        );
         return;
       }
     }
 
-    // Build messages for second call:
-    // - original messages
-    // - assistant message with tool_calls (required by OpenAI API)
-    // - tool result messages
-    const assistantMessageWithToolCalls: AssistantMessageWithToolCalls = {
-      role: 'assistant',
-      content: firstResponse.content,
-      tool_calls: supportedToolCalls,
-    };
+    await onEvent({
+      type: 'tool-status',
+      message: '已获取资料，正在整理答案...',
+    });
 
-    const messagesWithTool: (ChatCompletionMessage | ToolResultMessage | AssistantMessageWithToolCalls)[] = [
-      ...messages,
-      assistantMessageWithToolCalls,
-      ...toolResults,
-    ];
+    let secondCallMessages: ChatCompletionOptions['messages'];
 
-    // Second streaming completion to get final answer
+    if (firstResponse.toolCallSource === 'native') {
+      const assistantMessageWithToolCalls: AssistantMessageWithToolCalls = {
+        role: 'assistant',
+        content: firstResponse.content,
+        tool_calls: supportedToolCalls,
+        reasoning_content: firstResponse.reasoning,
+      };
+
+      const messagesWithTool: (ChatCompletionMessage | ToolResultMessage | AssistantMessageWithToolCalls)[] = [
+        ...messagesWithSynthesisPrompt,
+        assistantMessageWithToolCalls,
+        ...toolResults,
+      ];
+
+      secondCallMessages = messagesWithTool as ChatCompletionOptions['messages'];
+    } else {
+      const promptBasedContext = buildPromptBasedToolContextMessage(supportedToolCalls, toolResults);
+      const assistantCallTrace = firstResponse.content && firstResponse.content.trim().length > 0
+        ? [{ role: 'assistant', content: preToolContent } satisfies ChatCompletionMessage]
+        : [];
+
+      secondCallMessages = [
+        ...messagesWithSynthesisPrompt,
+        ...assistantCallTrace,
+        promptBasedContext,
+      ];
+    }
+
+    // Second streaming completion to get final answer.
     await executeStreamCompletion(
       {
         model: resolvedModel.model,
         provider: resolvedModel.provider,
-        messages: messagesWithTool as ChatCompletionOptions['messages'],
+        messages: secondCallMessages,
+        tools: [EXA_SEARCH_TOOL],
+        toolChoice: 'none',
+        thinking,
       },
       {
         onToken: async (token: string) => {
@@ -904,12 +1168,28 @@ async function executeToolCallingFlow(
           await onEvent({ type: 'reasoning', content });
         },
         onComplete: async (result: ChatCompletionResult) => {
+          const sanitizedResultContent = stripContentToolMarkup(result.content);
+          const containsToolMarkup = sanitizedResultContent !== result.content;
+          const finalContent = sanitizedResultContent.trim().length > 0
+            ? sanitizedResultContent
+            : containsToolMarkup
+              ? buildToolResultFallbackContent(toolResults)
+              : (result.content.trim().length > 0 ? result.content : preToolContent);
+          const finalReasoning = result.reasoning?.trim().length
+            ? result.reasoning
+            : (preToolReasoning.trim().length > 0 ? preToolReasoning : undefined);
+
           await finalizeAssistantMessage(
             sessionId,
             resolvedModel,
             pendingMutation,
-            result,
-            messages,
+            {
+              ...result,
+              content: finalContent,
+              reasoning: finalReasoning,
+              usage: mergeTokenUsage(firstResponse.usage, result.usage),
+            },
+            messagesWithNetworkPrompt,
             onEvent
           );
         },
@@ -919,13 +1199,14 @@ async function executeToolCallingFlow(
       }
     );
   } catch (error) {
+    console.error('Network search flow failed, falling back to normal mode:', error);
     // If the tool calling flow fails, fall back to normal flow
     await onEvent({
       type: 'notice',
       level: 'warning',
       message: 'Network search encountered an issue. Using normal chat mode.',
     });
-    await executeNormalFlow(sessionId, resolvedModel, messages, pendingMutation, onEvent);
+    await executeNormalFlow(sessionId, resolvedModel, messages, pendingMutation, onEvent, undefined, thinking);
   }
 }
 
@@ -997,6 +1278,7 @@ async function finalizeAssistantMessage(
     type: 'complete',
     messageId: assistantMessage.id,
     content: result.content,
+    usage: result.usage,
   });
 
   // Generate follow-up questions (best effort, non-blocking)

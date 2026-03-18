@@ -27,17 +27,42 @@
   --chat-accent-soft: rgba(37, 99, 235, 0.1);
   --chat-forest: #1d4ed8;
   --chat-forest-soft: rgba(29, 78, 216, 0.1);
+  --chat-background: #ffffff;
+  --chat-sidebar-bg: #f9fafb;
+  --chat-sidebar-border: #e5e7eb;
+  --chat-hover-bg: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="dark"] {
+  --chat-ink: #f3f4f6;
+  --chat-muted: #9ca3af;
+  --chat-line: rgba(255, 255, 255, 0.1);
+  --chat-line-strong: rgba(96, 165, 250, 0.3);
+  --chat-panel: #1f2937;
+  --chat-panel-strong: #111827;
+  --chat-page-top: #111827;
+  --chat-page-bottom: #1f2937;
+  --chat-accent: #60a5fa;
+  --chat-accent-soft: rgba(96, 165, 250, 0.15);
+  --chat-forest: #3b82f6;
+  --chat-forest-soft: rgba(59, 130, 246, 0.15);
+  --chat-background: #0f172a;
+  --chat-sidebar-bg: #1e293b;
+  --chat-sidebar-border: #334155;
+  --chat-hover-bg: rgba(255, 255, 255, 0.06);
 }
 
 html,
 body {
   font-family: var(--font-sans);
-  background: #ffffff;
+  background: var(--chat-background);
   color: var(--chat-ink);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
 
-  @media (prefers-color-scheme: dark) {
-    color-scheme: light;
-  }
+[data-theme="dark"] html,
+[data-theme="dark"] body {
+  color-scheme: dark;
 }
 
 /* Custom scrollbar styles */

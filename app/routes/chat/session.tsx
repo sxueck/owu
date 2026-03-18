@@ -5,6 +5,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
+import { TokenUsageRing } from "~/components/chat/token-usage-ring";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -62,12 +65,40 @@ interface ChatModelOption {
  */
 type SSEEvent =
   | { type: "start"; sessionId: string; model: string }
+  | { type: "tool-status"; message: string }
   | { type: "token"; content: string }
   | { type: "reasoning"; content: string }
-  | { type: "complete"; messageId: string; content: string }
+  | {
+      type: "complete";
+      messageId: string;
+      content: string;
+      usage?: {
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+      };
+    }
   | { type: "suggestions"; messageId: string; questions: string[] }
   | { type: "notice"; level: "info" | "warning"; message: string }
   | { type: "error"; message: string };
+
+function getSessionTokenUsageStorageKey(sessionId: string): string {
+  return `chat-session-token-usage:${sessionId}`;
+}
+
+function readSessionTokenUsage(sessionId: string): number {
+  if (typeof window === "undefined") {
+    return 0;
+  }
+
+  const raw = localStorage.getItem(getSessionTokenUsageStorageKey(sessionId));
+  if (!raw) {
+    return 0;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
 
 export function meta({ data }: Route.MetaArgs) {
   const session = data?.session;
@@ -188,9 +219,25 @@ function MessageContent({ content }: { content: string }) {
                   <CopyButton text={codeString} />
                 </div>
                 <div className="relative">
-                  <pre className="overflow-x-auto p-4 text-[13px] leading-relaxed text-white/90" style={{ fontFamily: 'var(--font-mono)' }}>
-                    <code className={className} style={{ fontFamily: 'var(--font-mono)' }} {...props}>{children}</code>
-                  </pre>
+                  <SyntaxHighlighter
+                    language={language || "text"}
+                    style={vscDarkPlus}
+                    customStyle={{
+                      margin: 0,
+                      padding: "1rem",
+                      background: "transparent",
+                      fontSize: "13px",
+                      lineHeight: "1.6",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                    codeTagProps={{
+                      style: {
+                        fontFamily: "var(--font-mono)",
+                      },
+                    }}
+                  >
+                    {codeString}
+                  </SyntaxHighlighter>
                 </div>
               </div>
             );
@@ -304,6 +351,7 @@ interface MessageCardProps {
   followUpQuestions?: string[] | null;
   createdAt?: Date;
   pending?: boolean;
+  pendingStatus?: string | null;
   assistantLabel?: string;
   onQuestionClick?: (question: string) => void;
   canEdit?: boolean;
@@ -326,6 +374,7 @@ function MessageCard({
   followUpQuestions,
   createdAt,
   pending,
+  pendingStatus,
   assistantLabel,
   onQuestionClick,
   canEdit,
@@ -344,14 +393,15 @@ function MessageCard({
   const label = isUser ? "You" : isAssistant ? assistantLabel || "Assistant" : "System";
   const hasReasoning = isAssistant && reasoning && reasoning.length > 0;
   const hasFollowUp = isAssistant && followUpQuestions && followUpQuestions.length > 0;
+  const showPendingStatus = pending && isAssistant && !!pendingStatus;
 
   return (
     <article
       className={[
         "animate-slide-up group px-2 py-3 sm:px-3 sm:py-4 transition-all duration-300",
-        isUser
+        isUser && !isEditing
           ? "ml-auto max-w-[92%]"
-          : "max-w-[95%]",
+          : "w-full",
         pending ? "opacity-95" : "",
       ].join(" ")}
     >
@@ -375,7 +425,7 @@ function MessageCard({
             <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 20h4l10.5-10.5a2.12 2.12 0 1 0-3-3L5 17v3Z" />
             </svg>
-            编辑最后一句
+            编辑
           </button>
         ) : null}
         {!pending && canRegenerate && id ? (
@@ -399,11 +449,15 @@ function MessageCard({
           <div className="space-y-3 rounded-2xl border border-[var(--chat-line)] bg-white p-3">
             <textarea
               value={editDraft ?? ""}
-              rows={3}
               autoFocus
               spellCheck={false}
-              className="chat-textarea min-h-[96px] w-full resize-y rounded-xl border border-[var(--chat-line)] bg-transparent px-3 py-2 text-[15px] text-[var(--chat-ink)] outline-none"
+              className="chat-textarea min-h-[96px] w-full resize-none rounded-xl border border-[var(--chat-line)] bg-transparent px-3 py-2 text-[15px] text-[var(--chat-ink)] outline-none"
               onChange={(event) => onEditDraftChange?.(event.target.value)}
+              onInput={(e) => {
+                const target = e.target as HTMLTextAreaElement;
+                target.style.height = "auto";
+                target.style.height = `${Math.min(target.scrollHeight, 400)}px`;
+              }}
             />
             <div className="flex items-center justify-end gap-2">
               <button
@@ -424,9 +478,17 @@ function MessageCard({
             </div>
           </div>
         ) : isUser ? (
-          <div className="whitespace-pre-wrap">{content}</div>
+          <div className="inline-block whitespace-pre-wrap rounded-2xl bg-gray-100 dark:bg-gray-800 px-4 py-3 border border-[var(--chat-line)]">{content}</div>
         ) : (
-          <MessageContent content={content} />
+          <div className="space-y-3">
+            {showPendingStatus ? (
+              <div className="inline-flex items-center gap-2 rounded-full border border-[var(--chat-line)] bg-[rgba(20,33,28,0.04)] px-3 py-1.5 text-sm text-[var(--chat-muted)]">
+                <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[var(--chat-accent)]" />
+                <span>{pendingStatus}</span>
+              </div>
+            ) : null}
+            <MessageContent content={content} />
+          </div>
         )}
         {pending && <span className="ml-1 inline-block h-4 w-1.5 animate-pulse rounded-full bg-[var(--chat-accent)] align-middle" />}
       </div>
@@ -442,9 +504,11 @@ interface PendingAssistantMessage {
   role: "assistant";
   content: string;
   reasoning: string;
+  statusMessage: string | null;
   model: string | null;
   modelLabel: string | null;
   createdAt: Date;
+  thinkingEnabled: boolean;
 }
 
 type SubmitIntent = "send" | "edit-last-user" | "regenerate-last-assistant";
@@ -475,6 +539,11 @@ export default function ChatSessionPage() {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const [networkEnabled, setNetworkEnabled] = useState(preferences.chatNetworkEnabled);
+  const [sessionTokenUsage, setSessionTokenUsage] = useState(() => readSessionTokenUsage(session.id));
+  const [thinkingEnabled, setThinkingEnabled] = useState(() => {
+    const searchParams = new URLSearchParams(location.search);
+    return searchParams.get("thinking") === "1";
+  });
   const [notice, setNotice] = useState<{ level: "info" | "warning"; message: string } | null>(null);
 
   // Persist network preference when toggled
@@ -498,6 +567,10 @@ export default function ChatSessionPage() {
     void persistNetworkPreference(enabled);
   }, [persistNetworkPreference]);
 
+  const handleThinkingToggle = useCallback((enabled: boolean) => {
+    setThinkingEnabled(enabled);
+  }, []);
+
   // 保存模型选择到 localStorage
   useEffect(() => {
     if (selectedModel) {
@@ -506,11 +579,32 @@ export default function ChatSessionPage() {
   }, [selectedModel]);
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const hasAutoSubmittedRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const sessionIdRef = useRef(session.id);
+  const shouldAutoScrollRef = useRef(true);
+
+  const isNearBottom = useCallback((element: HTMLDivElement) => {
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    return distanceFromBottom <= 80;
+  }, []);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    messagesEndRef.current?.scrollIntoView({ behavior, block: "end" });
+  }, []);
+
+  const handleMessagesScroll = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    shouldAutoScrollRef.current = isNearBottom(container);
+  }, [isNearBottom]);
 
   const activeModel = models.find((model) => model.id === selectedModel) ?? models[0];
   const lastMessage = messages[messages.length - 1] ?? null;
@@ -529,8 +623,31 @@ export default function ChatSessionPage() {
   const lastAssistantMessageId = [...messages].reverse().find((message) => message.role === "assistant")?.id ?? null;
 
   useEffect(() => {
+    if (sessionIdRef.current === session.id) {
+      return;
+    }
+
+    sessionIdRef.current = session.id;
     setMessages(initialMessages);
-  }, [initialMessages]);
+    pendingAssistantRef.current = null;
+    setPendingAssistant(null);
+    setIsStreaming(false);
+    setError(null);
+    setNotice(null);
+    setSessionTokenUsage(readSessionTokenUsage(session.id));
+    shouldAutoScrollRef.current = true;
+    requestAnimationFrame(() => {
+      scrollToBottom("auto");
+    });
+  }, [initialMessages, scrollToBottom, session.id]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    localStorage.setItem(getSessionTokenUsageStorageKey(session.id), String(sessionTokenUsage));
+  }, [session.id, sessionTokenUsage]);
 
   useEffect(() => {
     if (editingMessageId && !messages.some((message) => message.id === editingMessageId)) {
@@ -545,8 +662,12 @@ export default function ChatSessionPage() {
   }, [session.model, session.modelLabel]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, pendingAssistant?.content]);
+    if (!shouldAutoScrollRef.current) {
+      return;
+    }
+
+    scrollToBottom("auto");
+  }, [messages, pendingAssistant?.content, pendingAssistant?.statusMessage, scrollToBottom]);
 
   useEffect(() => {
     if (!isModelMenuOpen) {
@@ -573,6 +694,7 @@ export default function ChatSessionPage() {
       setError(null);
       setIsStreaming(true);
       setPendingAssistant(null);
+      shouldAutoScrollRef.current = true;
       setEditingMessageId(null);
       setEditDraft("");
 
@@ -631,14 +753,17 @@ export default function ChatSessionPage() {
         role: "assistant",
         content: "",
         reasoning: "",
+        statusMessage: "模型正在思考中...",
         model,
         modelLabel: selectedOption?.label ?? session.modelLabel,
         createdAt: new Date(),
+        thinkingEnabled,
       };
       pendingAssistantRef.current = initialPending;
       setPendingAssistant(initialPending);
 
       let streamCompleted = false;
+      let streamSettled = false;
       let streamStarted = false;
       const shouldRestorePreviousMessages = intent !== "send";
 
@@ -654,10 +779,11 @@ export default function ChatSessionPage() {
       try {
         await fetchEventSource(`/chat/${session.id}/stream`, {
           method: "POST",
+          openWhenHidden: true,
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ content, model, intent, messageId: options.messageId, networkEnabled }),
+          body: JSON.stringify({ content, model, intent, messageId: options.messageId, networkEnabled, thinkingEnabled }),
           signal: abortController.signal,
           async onopen(response) {
             if (!response.ok) {
@@ -681,6 +807,7 @@ export default function ChatSessionPage() {
                   if (pendingAssistantRef.current) {
                     pendingAssistantRef.current = {
                       ...pendingAssistantRef.current,
+                      statusMessage: null,
                       content: pendingAssistantRef.current.content + eventData.content,
                     };
                     setPendingAssistant(pendingAssistantRef.current);
@@ -692,7 +819,18 @@ export default function ChatSessionPage() {
                   if (pendingAssistantRef.current) {
                     pendingAssistantRef.current = {
                       ...pendingAssistantRef.current,
+                      statusMessage: null,
                       reasoning: pendingAssistantRef.current.reasoning + eventData.content,
+                    };
+                    setPendingAssistant(pendingAssistantRef.current);
+                  }
+                  break;
+
+                case "tool-status":
+                  if (pendingAssistantRef.current) {
+                    pendingAssistantRef.current = {
+                      ...pendingAssistantRef.current,
+                      statusMessage: eventData.message,
                     };
                     setPendingAssistant(pendingAssistantRef.current);
                   }
@@ -717,6 +855,11 @@ export default function ChatSessionPage() {
                   pendingAssistantRef.current = null;
                   setPendingAssistant(null);
                   setIsStreaming(false);
+                  const totalTokens = eventData.usage?.totalTokens;
+                  if (typeof totalTokens === "number" && totalTokens > 0) {
+                    setSessionTokenUsage((prev) => prev + totalTokens);
+                  }
+                  streamSettled = true;
                   streamCompleted = true;
                   break;
 
@@ -739,6 +882,7 @@ export default function ChatSessionPage() {
                   break;
 
                 case "error":
+                  streamSettled = true;
                   if (!streamStarted || shouldRestorePreviousMessages) {
                     rollbackOptimisticUserMessage();
                   }
@@ -753,13 +897,8 @@ export default function ChatSessionPage() {
             }
           },
           onclose() {
-            if (!streamCompleted) {
-              if (!streamStarted || shouldRestorePreviousMessages) {
-                rollbackOptimisticUserMessage();
-              }
-              setIsStreaming(false);
-              pendingAssistantRef.current = null;
-              setPendingAssistant(null);
+            if (!streamSettled) {
+              throw new Error("Stream closed before completion");
             }
           },
           onerror(err) {
@@ -792,7 +931,7 @@ export default function ChatSessionPage() {
         setPendingAssistant(null);
       }
     },
-    [activeModel, messages, models, selectedModel, session.id, session.modelLabel, networkEnabled]
+    [activeModel, messages, models, selectedModel, session.id, session.modelLabel, networkEnabled, thinkingEnabled]
   );
 
   const handleSubmit = useCallback(
@@ -835,6 +974,16 @@ export default function ChatSessionPage() {
     });
   }, [selectedModel, submitPrompt]);
 
+  const handleStopGeneration = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsStreaming(false);
+    pendingAssistantRef.current = null;
+    setPendingAssistant(null);
+  }, []);
+
   useEffect(() => {
     // 从 URL 查询参数中读取初始 prompt
     const searchParams = new URLSearchParams(location.search);
@@ -859,8 +1008,17 @@ export default function ChatSessionPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4 lg:px-6 lg:py-6">
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-5">
+      <div
+        ref={messagesContainerRef}
+        onScroll={handleMessagesScroll}
+        className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4 lg:px-6 lg:py-6"
+      >
+        <div className={[
+          "mx-auto flex w-full max-w-4xl",
+          messages.length === 0 && !isStreaming
+            ? "h-full flex-col items-center justify-center"
+            : "flex-col gap-5",
+        ].join(" ")}>
           {messages.length === 0 && !isStreaming ? (
             <div className="chat-panel-strong rounded-[30px] px-6 py-10 text-center sm:px-10">
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--chat-forest-soft)] text-[var(--chat-forest)]">
@@ -869,10 +1027,10 @@ export default function ChatSessionPage() {
                 </svg>
               </div>
               <h2 className="mt-5 text-xl font-medium text-[var(--chat-ink)]">
-                This session is ready.
+                会话已准备就绪
               </h2>
               <p className="mx-auto mt-3 max-w-lg text-sm leading-7 text-[var(--chat-muted)] sm:text-base">
-                Send the first prompt to start building the thread. The layout stays intentionally quiet so the conversation becomes the focal point.
+                发送第一条消息开始对话，详细明了的提示词能优化任务
               </p>
             </div>
           ) : (
@@ -908,8 +1066,9 @@ export default function ChatSessionPage() {
               {isStreaming && pendingAssistant && (
                 <MessageCard
                   role="assistant"
-                  content={pendingAssistant.content || "..."}
+                  content={pendingAssistant.content || (pendingAssistant.statusMessage ? "" : "...")}
                   reasoning={pendingAssistant.reasoning || null}
+                  pendingStatus={pendingAssistant.statusMessage}
                   pending
                   assistantLabel={activeAssistantLabel}
                 />
@@ -974,28 +1133,33 @@ export default function ChatSessionPage() {
                 />
               </div>
 
-              <button
-                type="submit"
-                disabled={isStreaming}
-                className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-[var(--chat-accent)] text-white transition-all duration-200 ease-out hover:bg-[#b95b30] hover:shadow-lg hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100 disabled:hover:shadow-none"
-                aria-label="Send message"
-              >
-                {isStreaming ? (
-                  <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8V0C5.37 0 0 5.37 0 12h4Zm2 5.29A7.94 7.94 0 0 1 4 12H0c0 3.04 1.14 5.82 3 7.94l3-2.65Z" />
+              {isStreaming ? (
+                <button
+                  type="button"
+                  onClick={handleStopGeneration}
+                  className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-red-500 text-white transition-all duration-200 ease-out hover:bg-red-600 hover:shadow-lg hover:scale-105 active:scale-95"
+                  aria-label="Stop generation"
+                  title="停止生成"
+                >
+                  <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+                    <rect x="6" y="6" width="12" height="12" rx="2" />
                   </svg>
-                ) : (
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-[var(--chat-accent)] text-white transition-all duration-200 ease-out hover:bg-[#b95b30] hover:shadow-lg hover:scale-105 active:scale-95"
+                  aria-label="Send message"
+                >
                   <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M21 3 10 14m0 0-4-4m4 4v7l11-18Z" />
                   </svg>
-                )}
-              </button>
+                </button>
+              )}
             </div>
 
             <div className="mt-3 flex flex-col gap-2 border-t border-[var(--chat-line)] px-2 pt-3 text-xs text-[var(--chat-muted)] sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-4">
-                <span>Enter to send, Shift + Enter for a new line.</span>
                 <button
                   type="button"
                   onClick={() => handleNetworkToggle(!networkEnabled)}
@@ -1012,6 +1176,25 @@ export default function ChatSessionPage() {
                   </svg>
                   <span className="text-[11px] font-medium">{networkEnabled ? "Online" : "Offline"}</span>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleThinkingToggle(!thinkingEnabled)}
+                  disabled={isStreaming}
+                  className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60 ${
+                    thinkingEnabled
+                      ? "border-purple-500 bg-purple-50 text-purple-600"
+                      : "border-[var(--chat-line)] bg-gray-50 hover:border-gray-300"
+                  }`}
+                  title={thinkingEnabled ? "Thinking mode enabled" : "Thinking mode disabled"}
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m12.728 0l-.707.707M12 21v-1M7.05 16.95l-.707.707M16.95 16.95l-.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z" />
+                  </svg>
+                  <span className="text-[11px] font-medium">{thinkingEnabled ? "Think" : "No Think"}</span>
+                </button>
+
+                <TokenUsageRing usedTokens={sessionTokenUsage} />
               </div>
               <div ref={modelMenuRef} className="relative self-start sm:self-auto">
                 <button

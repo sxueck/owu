@@ -29,6 +29,7 @@
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
     "react-router": "7.13.0",
+    "react-syntax-highlighter": "^16.1.1",
     "remark-gfm": "^4.0.1",
     "server-only": "^0.0.1",
     "zod": "^3.24.2"
@@ -41,6 +42,7 @@
     "@types/node": "^20",
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.1",
+    "@types/react-syntax-highlighter": "^15.5.13",
     "prisma": "^6.5.0",
     "tailwindcss": "^4.0.0",
     "tsx": "^4.7.0",

@@ -17,9 +17,9 @@ export async function getUserChatPreferences(userId: string): Promise<UserChatPr
     where: { userId },
   });
 
-  // Default to enabled if no preference record exists
+  // Default to disabled if no preference record exists
   return {
-    chatNetworkEnabled: preference?.chatNetworkEnabled ?? true,
+    chatNetworkEnabled: preference?.chatNetworkEnabled ?? false,
   };
 }
 
@@ -35,7 +35,7 @@ export async function saveUserChatPreferences(
     where: { userId },
     create: {
       userId,
-      chatNetworkEnabled: input.chatNetworkEnabled ?? true,
+      chatNetworkEnabled: input.chatNetworkEnabled ?? false,
     },
     update: {
       chatNetworkEnabled: input.chatNetworkEnabled,
