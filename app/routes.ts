@@ -16,7 +16,13 @@ export default [
   
   // Admin routes
   route("admin", "routes/admin/layout.tsx", [
-    index("routes/admin/settings.tsx"),
+    index("routes/admin/overview.tsx"),
+    route("providers", "routes/admin/providers.tsx"),
+    route("mcp", "routes/admin/mcp.tsx"),
+    route("search", "routes/admin/search.tsx"),
     route("models", "routes/admin/models.ts"),
   ]),
+
+  // API routes
+  route("api/preferences/network", "routes/api/preferences.network.ts"),
 ] satisfies RouteConfig;

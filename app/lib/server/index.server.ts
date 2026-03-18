@@ -18,6 +18,8 @@ export {
   saveSystemConfig,
   normalizeAllowedModels,
   normalizeProviderDrafts,
+  normalizeMCPServerDrafts,
+  normalizeSearchConfigInput,
   parseModelsInput,
   formatModelsForDisplay,
   isModelAllowed,
@@ -25,6 +27,7 @@ export {
   parseModelRef,
   resolveModelReference,
   resolveModelReferenceFromProviders,
+  validateMCPServerConfig,
 } from './config.server';
 export type {
   ModelOption,
@@ -35,7 +38,24 @@ export type {
   ResolvedModelReference,
   SaveSystemConfigInput,
   SystemConfigData,
+  MCPTransport,
+  MCPServerConfig,
+  PublicMCPServerConfig,
+  MCPServerDraftInput,
+  SearchConfig,
+  PublicSearchConfig,
+  SearchConfigInput,
 } from './config.server';
+
+// User Preferences
+export {
+  getUserChatPreferences,
+  saveUserChatPreferences,
+} from './preferences.server';
+export type {
+  UserChatPreferences,
+  UserPreferencesInput,
+} from './preferences.server';
 
 // Session Management
 export {
@@ -92,12 +112,29 @@ export type {
 export {
   fetchProviderModels,
   sendChatCompletion,
+  sendChatCompletionWithToolCalls,
   streamChatCompletion,
   testOpenAIConnection,
 } from './openai.server';
 export type {
   ChatCompletionMessage,
+  ToolResultMessage,
+  AssistantMessageWithToolCalls,
+  AssistantToolCall,
   ChatCompletionOptions,
   ChatCompletionResult,
+  ChatCompletionWithToolCallsResult,
+  ChatCompletionTool,
   FetchProviderModelsInput,
 } from './openai.server';
+
+// Exa Search Service
+export {
+  isExaConfigured,
+  executeExaSearch,
+  formatExaResultsForToolResponse,
+} from './exa.server';
+export type {
+  ExaSearchResult,
+  ExaSearchResponse,
+} from './exa.server';

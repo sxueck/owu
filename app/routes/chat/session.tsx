@@ -57,6 +57,7 @@ interface ChatModelOption {
  *
  * Event sequence contract:
  * start -> zero or more (reasoning | token) -> complete -> zero or one suggestions
+ * notice can appear at any point for non-fatal warnings/info
  * error can terminate at any point on failure paths
  */
 type SSEEvent =
@@ -65,6 +66,7 @@ type SSEEvent =
   | { type: "reasoning"; content: string }
   | { type: "complete"; messageId: string; content: string }
   | { type: "suggestions"; messageId: string; questions: string[] }
+  | { type: "notice"; level: "info" | "warning"; message: string }
   | { type: "error"; message: string };
 
 export function meta({ data }: Route.MetaArgs) {
@@ -96,12 +98,15 @@ interface LoaderData {
     followUpQuestions?: string[] | null;
     createdAt: Date;
   }>;
+  preferences: {
+    chatNetworkEnabled: boolean;
+  };
 }
 
 export async function loader({ request, params }: Route.LoaderArgs) {
   const cookieSession = await getSession(request.headers.get("Cookie"));
   const { requireUser } = await import("~/lib/server/session.server");
-  const { getAvailableModels, getChatMessages, getChatSessionMeta } = await import("~/lib/server/index.server");
+  const { getAvailableModels, getChatMessages, getChatSessionMeta, getUserChatPreferences } = await import("~/lib/server/index.server");
   const user = requireUser(cookieSession);
 
   const sessionId = params.sessionId;
@@ -110,11 +115,14 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   }
 
   try {
-    const models = await getAvailableModels();
-    const messages = await getChatMessages(sessionId, user);
-    const session = await getChatSessionMeta(sessionId, user);
+    const [models, messages, session, preferences] = await Promise.all([
+      getAvailableModels(),
+      getChatMessages(sessionId, user),
+      getChatSessionMeta(sessionId, user),
+      getUserChatPreferences(user.userId),
+    ]);
 
-    return { models, session, messages };
+    return { models, session, messages, preferences };
   } catch (error) {
     if (error instanceof Response) throw error;
     throw new Response("Failed to load chat session", { status: 500 });
@@ -289,6 +297,7 @@ function FollowUpQuestions({
 }
 
 interface MessageCardProps {
+  id?: string;
   role: "user" | "assistant" | "system";
   content: string;
   reasoning?: string | null;
@@ -297,9 +306,20 @@ interface MessageCardProps {
   pending?: boolean;
   assistantLabel?: string;
   onQuestionClick?: (question: string) => void;
+  canEdit?: boolean;
+  canRegenerate?: boolean;
+  isEditing?: boolean;
+  editDraft?: string;
+  actionBusy?: boolean;
+  onEditDraftChange?: (value: string) => void;
+  onEditStart?: (messageId: string, content: string) => void;
+  onEditCancel?: () => void;
+  onEditSave?: () => void;
+  onRegenerate?: (messageId: string) => void;
 }
 
 function MessageCard({
+  id,
   role,
   content,
   reasoning,
@@ -308,6 +328,16 @@ function MessageCard({
   pending,
   assistantLabel,
   onQuestionClick,
+  canEdit,
+  canRegenerate,
+  isEditing,
+  editDraft,
+  actionBusy,
+  onEditDraftChange,
+  onEditStart,
+  onEditCancel,
+  onEditSave,
+  onRegenerate,
 }: MessageCardProps) {
   const isUser = role === "user";
   const isAssistant = role === "assistant";
@@ -336,10 +366,64 @@ function MessageCard({
             {formatTime(createdAt)}
           </span>
         ) : null}
+        {!pending && canEdit && id && !isEditing ? (
+          <button
+            type="button"
+            onClick={() => onEditStart?.(id, content)}
+            className="ml-auto inline-flex items-center gap-1 rounded-full border border-[var(--chat-line)] px-2 py-1 text-[11px] text-[var(--chat-muted)] opacity-0 transition-all duration-200 group-hover:opacity-100 hover:border-[var(--chat-accent)] hover:text-[var(--chat-accent)]"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 20h4l10.5-10.5a2.12 2.12 0 1 0-3-3L5 17v3Z" />
+            </svg>
+            编辑最后一句
+          </button>
+        ) : null}
+        {!pending && canRegenerate && id ? (
+          <button
+            type="button"
+            onClick={() => onRegenerate?.(id)}
+            disabled={actionBusy}
+            className="ml-auto inline-flex items-center gap-1 rounded-full border border-[var(--chat-line)] px-2 py-1 text-[11px] text-[var(--chat-muted)] opacity-0 transition-all duration-200 group-hover:opacity-100 hover:border-[var(--chat-accent)] hover:text-[var(--chat-accent)] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4.5 4.5v5h5M19.5 19.5v-5h-5" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M20 9a8 8 0 0 0-13.66-4.95L4.5 5.5M4 15a8 8 0 0 0 13.66 4.95L19.5 18.5" />
+            </svg>
+            重新生成
+          </button>
+        ) : null}
       </div>
       {hasReasoning && <ReasoningPanel reasoning={reasoning} />}
       <div className="text-[15px] text-[var(--chat-ink)]">
-        {isUser ? (
+        {isUser && isEditing ? (
+          <div className="space-y-3 rounded-2xl border border-[var(--chat-line)] bg-white p-3">
+            <textarea
+              value={editDraft ?? ""}
+              rows={3}
+              autoFocus
+              spellCheck={false}
+              className="chat-textarea min-h-[96px] w-full resize-y rounded-xl border border-[var(--chat-line)] bg-transparent px-3 py-2 text-[15px] text-[var(--chat-ink)] outline-none"
+              onChange={(event) => onEditDraftChange?.(event.target.value)}
+            />
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={onEditCancel}
+                className="rounded-full border border-[var(--chat-line)] px-3 py-1.5 text-sm text-[var(--chat-muted)] transition-colors hover:text-[var(--chat-ink)]"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={onEditSave}
+                disabled={actionBusy || !(editDraft ?? "").trim()}
+                className="rounded-full bg-[var(--chat-accent)] px-3 py-1.5 text-sm text-white transition-all hover:bg-[#b95b30] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                保存并重试
+              </button>
+            </div>
+          </div>
+        ) : isUser ? (
           <div className="whitespace-pre-wrap">{content}</div>
         ) : (
           <MessageContent content={content} />
@@ -363,8 +447,15 @@ interface PendingAssistantMessage {
   createdAt: Date;
 }
 
+type SubmitIntent = "send" | "edit-last-user" | "regenerate-last-assistant";
+
+interface SubmitPromptOptions {
+  intent?: SubmitIntent;
+  messageId?: string;
+}
+
 export default function ChatSessionPage() {
-  const { models, session, messages: initialMessages } = useLoaderData<typeof loader>();
+  const { models, session, messages: initialMessages, preferences } = useLoaderData<typeof loader>();
   const location = useLocation();
   const navigate = useNavigate();
   const [messages, setMessages] = useState<LoaderData["messages"]>(initialMessages);
@@ -381,6 +472,31 @@ export default function ChatSessionPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState(session.model);
   const [activeAssistantLabel, setActiveAssistantLabel] = useState(session.modelLabel);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [networkEnabled, setNetworkEnabled] = useState(preferences.chatNetworkEnabled);
+  const [notice, setNotice] = useState<{ level: "info" | "warning"; message: string } | null>(null);
+
+  // Persist network preference when toggled
+  const persistNetworkPreference = useCallback(async (enabled: boolean) => {
+    try {
+      const response = await fetch("/api/preferences/network", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatNetworkEnabled: enabled }),
+      });
+      if (!response.ok) {
+        console.warn("Failed to persist network preference");
+      }
+    } catch (err) {
+      console.warn("Failed to persist network preference:", err);
+    }
+  }, []);
+
+  const handleNetworkToggle = useCallback((enabled: boolean) => {
+    setNetworkEnabled(enabled);
+    void persistNetworkPreference(enabled);
+  }, [persistNetworkPreference]);
 
   // 保存模型选择到 localStorage
   useEffect(() => {
@@ -397,11 +513,31 @@ export default function ChatSessionPage() {
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const activeModel = models.find((model) => model.id === selectedModel) ?? models[0];
+  const lastMessage = messages[messages.length - 1] ?? null;
+  const lastAssistantMessage = [...messages].reverse().find((message) => message.role === "assistant") ?? null;
+  const latestEditableUserMessage = (() => {
+    if (!lastMessage) return null;
+    if (lastMessage.role === "user") return lastMessage;
+    if (lastMessage.role === "assistant") {
+      const previousMessage = messages[messages.length - 2] ?? null;
+      if (previousMessage?.role === "user") {
+        return previousMessage;
+      }
+    }
+    return null;
+  })();
   const lastAssistantMessageId = [...messages].reverse().find((message) => message.role === "assistant")?.id ?? null;
 
   useEffect(() => {
     setMessages(initialMessages);
   }, [initialMessages]);
+
+  useEffect(() => {
+    if (editingMessageId && !messages.some((message) => message.id === editingMessageId)) {
+      setEditingMessageId(null);
+      setEditDraft("");
+    }
+  }, [editingMessageId, messages]);
 
   useEffect(() => {
     setSelectedModel(session.model);
@@ -429,13 +565,16 @@ export default function ChatSessionPage() {
   }, [isModelMenuOpen]);
 
   const submitPrompt = useCallback(
-    async (rawContent: string, model = selectedModel) => {
+    async (rawContent: string, model = selectedModel, options: SubmitPromptOptions = {}) => {
+      const intent = options.intent ?? "send";
       const content = rawContent.trim();
-      if (!content) return;
+      if ((intent === "send" || intent === "edit-last-user") && !content) return;
 
       setError(null);
       setIsStreaming(true);
       setPendingAssistant(null);
+      setEditingMessageId(null);
+      setEditDraft("");
 
       // Abort any existing request
       if (abortControllerRef.current) {
@@ -453,16 +592,37 @@ export default function ChatSessionPage() {
 
       const selectedOption = models.find((item) => item.id === model) ?? activeModel;
       setActiveAssistantLabel(selectedOption?.label ?? session.modelLabel);
+      const previousMessages = messages;
 
-      const optimisticUserMessage: LoaderData["messages"][number] = {
-        id: `temp-${Date.now()}`,
-        role: "user" as const,
-        model: null,
-        modelLabel: null,
-        content: content.trim(),
-        createdAt: new Date(),
-      };
-      setMessages((prev) => [...prev, optimisticUserMessage]);
+      let optimisticUserMessageId: string | null = null;
+      if (intent === "send") {
+        const optimisticUserMessage: LoaderData["messages"][number] = {
+          id: `temp-${Date.now()}`,
+          role: "user" as const,
+          model: null,
+          modelLabel: null,
+          content: content.trim(),
+          createdAt: new Date(),
+        };
+        optimisticUserMessageId = optimisticUserMessage.id;
+        setMessages((prev) => [...prev, optimisticUserMessage]);
+      } else if (intent === "edit-last-user") {
+        setMessages((prev) => {
+          const lastCurrent = prev[prev.length - 1] ?? null;
+          return prev
+            .filter((message) => !(lastCurrent?.role === "assistant" && message.id === lastCurrent.id))
+            .map((message) =>
+              message.id === options.messageId
+                ? {
+                    ...message,
+                    content,
+                  }
+                : message
+            );
+        });
+      } else if (intent === "regenerate-last-assistant") {
+        setMessages((prev) => prev.filter((message) => message.id !== options.messageId));
+      }
 
       // Initialize pending assistant message (ref first to avoid race conditions)
       const pendingId = `pending-${Date.now()}`;
@@ -480,9 +640,15 @@ export default function ChatSessionPage() {
 
       let streamCompleted = false;
       let streamStarted = false;
+      const shouldRestorePreviousMessages = intent !== "send";
 
       const rollbackOptimisticUserMessage = () => {
-        setMessages((prev) => prev.filter((message) => message.id !== optimisticUserMessage.id));
+        if (intent === "send" && optimisticUserMessageId) {
+          setMessages((prev) => prev.filter((message) => message.id !== optimisticUserMessageId));
+          return;
+        }
+
+        setMessages(previousMessages);
       };
 
       try {
@@ -491,7 +657,7 @@ export default function ChatSessionPage() {
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ content, model }),
+          body: JSON.stringify({ content, model, intent, messageId: options.messageId, networkEnabled }),
           signal: abortController.signal,
           async onopen(response) {
             if (!response.ok) {
@@ -565,12 +731,20 @@ export default function ChatSessionPage() {
                   );
                   break;
 
+                case "notice":
+                  // Show non-fatal notice to user (e.g., search downgrade)
+                  setNotice({ level: eventData.level, message: eventData.message });
+                  // Auto-clear notice after 8 seconds
+                  setTimeout(() => setNotice(null), 8000);
+                  break;
+
                 case "error":
-                  if (!streamStarted) {
+                  if (!streamStarted || shouldRestorePreviousMessages) {
                     rollbackOptimisticUserMessage();
                   }
                   setError(eventData.message);
                   setIsStreaming(false);
+                  pendingAssistantRef.current = null;
                   setPendingAssistant(null);
                   break;
               }
@@ -580,20 +754,22 @@ export default function ChatSessionPage() {
           },
           onclose() {
             if (!streamCompleted) {
-              if (!streamStarted) {
+              if (!streamStarted || shouldRestorePreviousMessages) {
                 rollbackOptimisticUserMessage();
               }
               setIsStreaming(false);
+              pendingAssistantRef.current = null;
               setPendingAssistant(null);
             }
           },
           onerror(err) {
             console.error("SSE error:", err);
-            if (!streamStarted) {
+            if (!streamStarted || shouldRestorePreviousMessages) {
               rollbackOptimisticUserMessage();
             }
             setError(err instanceof Error ? err.message : "Stream connection failed");
             setIsStreaming(false);
+            pendingAssistantRef.current = null;
             setPendingAssistant(null);
             throw err;
           },
@@ -601,21 +777,22 @@ export default function ChatSessionPage() {
       } catch (err) {
         // Don't show error for aborted requests
         if (err instanceof Error && err.name === "AbortError") {
-          if (!streamStarted) {
+          if (!streamStarted || shouldRestorePreviousMessages) {
             rollbackOptimisticUserMessage();
           }
           return;
         }
         const message = err instanceof Error ? err.message : "Failed to send message";
-        if (!streamStarted) {
+        if (!streamStarted || shouldRestorePreviousMessages) {
           rollbackOptimisticUserMessage();
         }
         setError(message);
         setIsStreaming(false);
+        pendingAssistantRef.current = null;
         setPendingAssistant(null);
       }
     },
-    [activeModel, models, selectedModel, session.id, session.modelLabel]
+    [activeModel, messages, models, selectedModel, session.id, session.modelLabel, networkEnabled]
   );
 
   const handleSubmit = useCallback(
@@ -629,6 +806,34 @@ export default function ChatSessionPage() {
     },
     [selectedModel, submitPrompt],
   );
+
+  const handleStartEdit = useCallback((messageId: string, content: string) => {
+    setEditingMessageId(messageId);
+    setEditDraft(content);
+  }, []);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditingMessageId(null);
+    setEditDraft("");
+  }, []);
+
+  const handleSaveEdit = useCallback(async () => {
+    if (!editingMessageId) {
+      return;
+    }
+
+    await submitPrompt(editDraft, selectedModel, {
+      intent: "edit-last-user",
+      messageId: editingMessageId,
+    });
+  }, [editDraft, editingMessageId, selectedModel, submitPrompt]);
+
+  const handleRegenerate = useCallback(async (messageId: string) => {
+    await submitPrompt("", selectedModel, {
+      intent: "regenerate-last-assistant",
+      messageId,
+    });
+  }, [selectedModel, submitPrompt]);
 
   useEffect(() => {
     // 从 URL 查询参数中读取初始 prompt
@@ -675,6 +880,7 @@ export default function ChatSessionPage() {
               {messages.map((message) => (
                 <MessageCard
                   key={message.id}
+                  id={message.id}
                   role={message.role}
                   content={message.content}
                   reasoning={message.reasoning}
@@ -686,6 +892,16 @@ export default function ChatSessionPage() {
                   createdAt={message.createdAt}
                   assistantLabel={message.modelLabel ?? activeAssistantLabel}
                   onQuestionClick={submitPrompt}
+                  canEdit={!isStreaming && message.role === "user" && message.id === latestEditableUserMessage?.id}
+                  canRegenerate={!isStreaming && message.role === "assistant" && message.id === lastMessage?.id && message.id === lastAssistantMessage?.id}
+                  isEditing={message.id === editingMessageId}
+                  editDraft={message.id === editingMessageId ? editDraft : undefined}
+                  actionBusy={isStreaming}
+                  onEditDraftChange={setEditDraft}
+                  onEditStart={handleStartEdit}
+                  onEditCancel={handleCancelEdit}
+                  onEditSave={handleSaveEdit}
+                  onRegenerate={handleRegenerate}
                 />
               ))}
 
@@ -706,6 +922,18 @@ export default function ChatSessionPage() {
 
       <div className="safe-bottom px-4 py-4 sm:px-6 lg:px-8">
         <div className="mx-auto w-full max-w-4xl">
+          {notice && (
+            <div
+              className={`mb-4 rounded-[22px] border px-4 py-3 text-sm ${
+                notice.level === "warning"
+                  ? "border-amber-200 bg-amber-50 text-amber-700"
+                  : "border-blue-200 bg-blue-50 text-blue-700"
+              }`}
+            >
+              {notice.message}
+            </div>
+          )}
+
           {error && (
             <div className="mb-4 rounded-[22px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {error}
@@ -766,7 +994,25 @@ export default function ChatSessionPage() {
             </div>
 
             <div className="mt-3 flex flex-col gap-2 border-t border-[var(--chat-line)] px-2 pt-3 text-xs text-[var(--chat-muted)] sm:flex-row sm:items-center sm:justify-between">
-              <span>Enter to send, Shift + Enter for a new line.</span>
+              <div className="flex items-center gap-4">
+                <span>Enter to send, Shift + Enter for a new line.</span>
+                <button
+                  type="button"
+                  onClick={() => handleNetworkToggle(!networkEnabled)}
+                  disabled={isStreaming}
+                  className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60 ${
+                    networkEnabled
+                      ? "border-[var(--chat-accent)] bg-[rgba(199,103,58,0.1)] text-[var(--chat-accent)]"
+                      : "border-[var(--chat-line)] bg-gray-50 hover:border-gray-300"
+                  }`}
+                  title={networkEnabled ? "Network search enabled" : "Network search disabled"}
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+                  </svg>
+                  <span className="text-[11px] font-medium">{networkEnabled ? "Online" : "Offline"}</span>
+                </button>
+              </div>
               <div ref={modelMenuRef} className="relative self-start sm:self-auto">
                 <button
                   type="button"

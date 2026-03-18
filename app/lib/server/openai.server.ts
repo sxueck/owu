@@ -7,12 +7,47 @@ export interface ChatCompletionMessage {
   content: string;
 }
 
+export interface ToolResultMessage {
+  role: "tool";
+  content: string;
+  tool_call_id: string;
+}
+
+export interface AssistantToolCall {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+export interface AssistantMessageWithToolCalls {
+  role: "assistant";
+  content: string | null;
+  tool_calls: AssistantToolCall[];
+}
+
+export interface ChatCompletionTool {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: {
+      type: "object";
+      properties: Record<string, unknown>;
+      required?: string[];
+    };
+  };
+}
+
 export interface ChatCompletionOptions {
   model: string;
   provider: OpenAIProviderConfig;
-  messages: ChatCompletionMessage[];
+  messages: (ChatCompletionMessage | ToolResultMessage)[];
   temperature?: number;
   maxTokens?: number;
+  tools?: ChatCompletionTool[];
 }
 
 export interface ChatCompletionResult {
@@ -111,16 +146,31 @@ export async function fetchProviderModels(input: FetchProviderModelsInput): Prom
   }
 }
 
+export interface ChatCompletionWithToolCallsResult {
+  content: string | null;
+  reasoning?: string;
+  toolCalls: AssistantToolCall[];
+  model: string;
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+}
+
 export async function sendChatCompletion(options: ChatCompletionOptions): Promise<ChatCompletionResult> {
   const client = createOpenAIClient(options.provider);
 
   try {
-    const response = await client.chat.completions.create({
+    const requestBody: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
       model: options.model,
-      messages: options.messages,
+      messages: options.messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
       temperature: options.temperature ?? 1,
       max_tokens: options.maxTokens,
-    });
+      tools: options.tools as OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
+    };
+
+    const response = await client.chat.completions.create(requestBody);
 
     const choice = response.choices[0];
     if (!choice || !choice.message) {
@@ -129,6 +179,88 @@ export async function sendChatCompletion(options: ChatCompletionOptions): Promis
 
     return {
       content: choice.message.content || "",
+      model: response.model,
+      usage: response.usage
+        ? {
+            promptTokens: response.usage.prompt_tokens,
+            completionTokens: response.usage.completion_tokens,
+            totalTokens: response.usage.total_tokens,
+          }
+        : undefined,
+    };
+  } catch (error) {
+    if (error instanceof OpenAI.APIError) {
+      throw new Error(`OpenAI API Error: ${error.message}`);
+    }
+
+    if (error instanceof Error) {
+      throw new Error(`Failed to get response from AI: ${error.message}`);
+    }
+
+    throw new Error("Failed to get response from AI: Unknown error");
+  }
+}
+
+/**
+ * Send a chat completion request and return full response including any tool calls.
+ * This is used for the first call in a tool-calling flow to discover if the model
+ * wants to invoke any tools.
+ */
+export async function sendChatCompletionWithToolCalls(
+  options: ChatCompletionOptions
+): Promise<ChatCompletionWithToolCallsResult> {
+  const client = createOpenAIClient(options.provider);
+
+  try {
+    const requestBody: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
+      model: options.model,
+      messages: options.messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+      temperature: options.temperature ?? 1,
+      max_tokens: options.maxTokens,
+      tools: options.tools as OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
+    };
+
+    const response = await client.chat.completions.create(requestBody);
+
+    const choice = response.choices[0];
+    if (!choice || !choice.message) {
+      throw new Error("Empty response from OpenAI");
+    }
+
+    const message = choice.message;
+
+    // Extract tool calls if present
+    const toolCalls: AssistantToolCall[] = [];
+    if (message.tool_calls && Array.isArray(message.tool_calls)) {
+      for (const tc of message.tool_calls) {
+        if (tc.type === "function" && tc.function) {
+          toolCalls.push({
+            id: tc.id,
+            type: "function",
+            function: {
+              name: tc.function.name,
+              arguments: tc.function.arguments,
+            },
+          });
+        }
+      }
+    }
+
+    // Extract reasoning if available (from provider-specific fields)
+    let reasoning: string | undefined;
+    const msgWithReasoning = message as unknown as Record<string, unknown>;
+    if (typeof msgWithReasoning.reasoning_content === "string") {
+      reasoning = msgWithReasoning.reasoning_content;
+    } else if (typeof msgWithReasoning.thinking === "string") {
+      reasoning = msgWithReasoning.thinking;
+    } else if (typeof msgWithReasoning.reasoning === "string") {
+      reasoning = msgWithReasoning.reasoning;
+    }
+
+    return {
+      content: message.content,
+      reasoning,
+      toolCalls,
       model: response.model,
       usage: response.usage
         ? {
@@ -188,13 +320,16 @@ export async function streamChatCompletion(
   const client = createOpenAIClient(options.provider);
 
   try {
-    const stream = await client.chat.completions.create({
+    const requestBody: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming = {
       model: options.model,
-      messages: options.messages,
+      messages: options.messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
       temperature: options.temperature ?? 1,
       max_tokens: options.maxTokens,
       stream: true,
-    });
+      tools: options.tools as OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
+    };
+
+    const stream = await client.chat.completions.create(requestBody);
 
     let fullContent = "";
     let fullReasoning = "";

@@ -15,6 +15,30 @@ export interface AuthUser {
   password: string; // hashed
 }
 
+async function promoteUserToAdminIfBootstrapCandidate(userId: string): Promise<'admin' | 'user'> {
+  const [adminCount, totalUsers] = await Promise.all([
+    prisma.user.count({ where: { role: 'admin' } }),
+    prisma.user.count(),
+  ]);
+
+  if (adminCount > 0 || totalUsers !== 1) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true },
+    });
+
+    return user?.role ?? 'user';
+  }
+
+  const updatedUser = await prisma.user.update({
+    where: { id: userId },
+    data: { role: 'admin' },
+    select: { role: true },
+  });
+
+  return updatedUser.role;
+}
+
 /**
  * Verify user credentials for login
  */
@@ -42,11 +66,15 @@ export async function verifyUserCredentials(
     return null;
   }
 
+  const role = user.role === 'admin'
+    ? 'admin'
+    : await promoteUserToAdminIfBootstrapCandidate(user.id);
+
   return {
     id: user.id,
     email: user.email,
     username: user.username,
-    role: user.role,
+    role,
   };
 }
 
@@ -78,13 +106,19 @@ export async function registerUser(data: {
   const hashedPassword = await bcrypt.hash(data.password, 10);
 
   // Create user
-  const user = await prisma.user.create({
-    data: {
-      email: data.email,
-      username: data.username,
-      password: hashedPassword,
-      role: 'user', // Default role
-    },
+  const user = await prisma.$transaction(async (tx) => {
+    const adminCount = await tx.user.count({
+      where: { role: 'admin' },
+    });
+
+    return tx.user.create({
+      data: {
+        email: data.email,
+        username: data.username,
+        password: hashedPassword,
+        role: adminCount === 0 ? 'admin' : 'user',
+      },
+    });
   });
 
   return {

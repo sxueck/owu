@@ -1,6 +1,6 @@
 import type { Route } from "./+types/index";
 import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } from "react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getSession } from "~/sessions";
 
 export function meta({}: Route.MetaArgs) {
@@ -61,6 +61,15 @@ export async function action({ request }: Route.ActionArgs) {
 
 const LAST_SELECTED_MODEL_KEY = "lastSelectedModel";
 
+function createSubmissionKey(prompt: string, model: string): string | null {
+  const content = prompt.trim();
+  if (!content) {
+    return null;
+  }
+
+  return JSON.stringify([content, model.trim()]);
+}
+
 export default function ChatIndexPage() {
   const { models } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
@@ -82,7 +91,14 @@ export default function ChatIndexPage() {
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modelMenuRef = useRef<HTMLDivElement>(null);
+  const submitLockRef = useRef<string | null>(null);
   const activeModel = models.find((model) => model.id === selectedModel) ?? models[0];
+
+  useEffect(() => {
+    if (navigation.state === "idle") {
+      submitLockRef.current = null;
+    }
+  }, [navigation.state]);
 
   useEffect(() => {
     if (!isModelMenuOpen) {
@@ -99,6 +115,22 @@ export default function ChatIndexPage() {
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [isModelMenuOpen]);
+
+  const handleSubmit = useCallback((event: React.FormEvent<HTMLFormElement>) => {
+    const key = createSubmissionKey(prompt, selectedModel);
+
+    if (!key) {
+      event.preventDefault();
+      return;
+    }
+
+    if (submitLockRef.current === key) {
+      event.preventDefault();
+      return;
+    }
+
+    submitLockRef.current = key;
+  }, [prompt, selectedModel]);
 
   return (
     <div className="relative flex flex-1 flex-col overflow-y-auto px-4 py-6 sm:px-6 lg:px-10 lg:py-8 xl:px-14">
@@ -142,7 +174,7 @@ export default function ChatIndexPage() {
                     </p>
                   </div>
 
-                  <Form method="post" className="mt-10">
+                  <Form method="post" className="mt-10" onSubmit={handleSubmit}>
                     <input type="hidden" name="model" value={selectedModel} />
 
                     {actionData?.error && (
@@ -162,7 +194,7 @@ export default function ChatIndexPage() {
                         onChange={(event) => setPrompt(event.target.value)}
                         className="chat-textarea min-h-[38px] max-h-[200px] w-full resize-none border-none bg-transparent px-0 py-2 text-[15px] leading-relaxed text-[var(--chat-ink)] outline-none placeholder:text-[var(--chat-muted)]/60"
                         onKeyDown={(event) => {
-                          if (event.key === "Enter" && !event.shiftKey) {
+                          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                             event.preventDefault();
                             const form = event.currentTarget.form;
                             form?.requestSubmit();

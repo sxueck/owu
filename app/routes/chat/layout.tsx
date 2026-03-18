@@ -17,8 +17,10 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   const user = requireUser(session);
   const sessions = await getUserChatSessions(user);
+  const version = process.env.APP_VERSION ?? "dev";
+  const buildTime = process.env.APP_BUILD_TIME ?? new Date().toISOString();
 
-  return { user, sessions };
+  return { user, sessions, version, buildTime };
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -85,7 +87,7 @@ function formatSessionTitle(title: string) {
 }
 
 export default function ChatLayout() {
-  const { user, sessions } = useLoaderData<typeof loader>();
+  const { user, sessions, version, buildTime } = useLoaderData<typeof loader>();
   const location = useLocation();
   const submit = useSubmit();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -436,7 +438,22 @@ export default function ChatLayout() {
               <div className="font-medium text-[var(--chat-ink)]">OWU</div>
             </div>
           </header>
-          <Outlet />
+          <div className="flex min-h-0 flex-1 flex-col">
+            <Outlet />
+          </div>
+          <footer className="px-4 py-2 sm:px-6 lg:px-8">
+            <div className="mx-auto flex w-full max-w-4xl items-center justify-center gap-2 text-[11px] text-[var(--chat-muted)]">
+              <span>v{version}</span>
+              <span>·</span>
+              <span>{new Date(buildTime).toLocaleString("zh-CN", {
+                year: "numeric",
+                month: "2-digit",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit"
+              })} 构建</span>
+            </div>
+          </footer>
         </div>
       </main>
     </div>

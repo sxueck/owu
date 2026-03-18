@@ -63,13 +63,16 @@ export function requireUser(session: Session, redirectTo: string = '/login'): Se
 }
 
 /**
- * Require admin role, redirect or throw 403 if not admin
+ * Require admin role, redirect if not admin
  */
 export function requireAdmin(session: Session, redirectTo: string = '/chat'): SessionData {
   const user = requireUser(session);
   if (user.role !== 'admin') {
-    throw new Response('Forbidden: Admin access required', {
-      status: 403,
+    throw new Response(null, {
+      status: 302,
+      headers: {
+        Location: redirectTo,
+      },
     });
   }
   return user;

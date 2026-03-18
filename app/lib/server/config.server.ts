@@ -3,6 +3,8 @@ import { prisma } from "./db.server";
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const MULTI_PROVIDER_CONFIG_VERSION = 2;
+const MCP_CONFIG_VERSION = 1;
+const SEARCH_CONFIG_VERSION = 1;
 const MODEL_REF_SEPARATOR = "::";
 const LEGACY_PROVIDER_ID = "primary";
 
@@ -34,12 +36,85 @@ export interface ResolvedModelReference extends ModelOption {
   provider: OpenAIProviderConfig;
 }
 
+// MCP Transport types
+export type MCPTransport = "stdio" | "sse" | "streamable-http" | "http";
+
+// MCP Server configuration interface
+export interface MCPServerConfig {
+  id: string;
+  name: string;
+  description: string;
+  transport: MCPTransport;
+  command: string | null;
+  args: string[];
+  env: Array<{ key: string; value: string }>;
+  url: string | null;
+  headers: Array<{ key: string; value: string }>;
+  enabled: boolean;
+}
+
+// MCP Server configuration for public consumption (admin UI)
+export interface PublicMCPServerConfig {
+  id: string;
+  name: string;
+  description: string;
+  transport: MCPTransport;
+  command: string | null;
+  args: string[];
+  env: Array<{ key: string; value: string }>;
+  url: string | null;
+  headers: Array<{ key: string; value: string }>;
+  enabled: boolean;
+  // Indicates if this server can be used (has required fields for its transport)
+  isValid: boolean;
+}
+
+// MCP Server draft input for saving
+export interface MCPServerDraftInput {
+  id?: string;
+  name?: string;
+  description?: string;
+  transport?: MCPTransport;
+  command?: string | null;
+  args?: string[];
+  env?: Array<{ key: string; value: string }>;
+  url?: string | null;
+  headers?: Array<{ key: string; value: string }>;
+  enabled?: boolean;
+}
+
+// Search configuration interfaces
+export interface SearchConfig {
+  enabled: boolean;
+  apiKey: string | null;
+  baseUrl: string | null;
+  defaultResultCount: number;
+  isConfigured: boolean;
+}
+
+export interface PublicSearchConfig {
+  enabled: boolean;
+  apiKeyPresent: boolean;
+  baseUrl: string | null;
+  defaultResultCount: number;
+  isConfigured: boolean;
+}
+
+export interface SearchConfigInput {
+  enabled?: boolean;
+  apiKey?: string;
+  baseUrl?: string | null;
+  defaultResultCount?: number;
+}
+
 export interface SystemConfigData {
   id: string;
   openaiApiKey: string | null;
   openaiBaseUrl: string | null;
   allowedModels: string[];
   providers: OpenAIProviderConfig[];
+  mcpServers: MCPServerConfig[];
+  searchConfig: SearchConfig;
   updatedAt: Date;
   updatedBy: string | null;
 }
@@ -52,6 +127,9 @@ export interface PublicConfigData {
   providers: PublicOpenAIProviderConfig[];
   providerCount: number;
   modelCount: number;
+  mcpServers: PublicMCPServerConfig[];
+  mcpServerCount: number;
+  searchConfig: PublicSearchConfig;
   updatedAt: Date;
   updatedBy: string | null;
 }
@@ -78,8 +156,304 @@ type StoredProvidersEnvelope = {
   providers: StoredProviderRecord[];
 };
 
+type StoredMCPServerRecord = {
+  id?: unknown;
+  name?: unknown;
+  description?: unknown;
+  transport?: unknown;
+  command?: unknown;
+  args?: unknown;
+  env?: unknown;
+  url?: unknown;
+  headers?: unknown;
+  enabled?: unknown;
+};
+
+type StoredMCPServersEnvelope = {
+  version: number;
+  servers: StoredMCPServerRecord[];
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// MCP helper functions
+
+const VALID_MCP_TRANSPORTS: MCPTransport[] = ["stdio", "sse", "streamable-http", "http"];
+
+function isValidMCPTransport(transport: unknown): transport is MCPTransport {
+  return typeof transport === "string" && VALID_MCP_TRANSPORTS.includes(transport as MCPTransport);
+}
+
+function normalizeMCPServerId(id: string | undefined, index: number): string {
+  const sanitized = (id ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return sanitized || `mcp-server-${index + 1}`;
+}
+
+function ensureUniqueMCPServerId(baseId: string, usedIds: Set<string>): string {
+  let candidate = baseId;
+  let suffix = 2;
+
+  while (usedIds.has(candidate)) {
+    candidate = `${baseId}-${suffix}`;
+    suffix += 1;
+  }
+
+  usedIds.add(candidate);
+  return candidate;
+}
+
+function normalizeMCPStringArray(values: unknown): string[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  return values
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+}
+
+function normalizeMCPKeyValueArray(values: unknown): Array<{ key: string; value: string }> {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  return values
+    .filter((item): item is { key: string; value: string } => {
+      if (!isRecord(item)) return false;
+      const key = item.key;
+      const value = item.value;
+      return typeof key === "string" && typeof value === "string" && key.trim().length > 0;
+    })
+    .map((item) => ({
+      key: item.key.trim(),
+      value: item.value,
+    }));
+}
+
+function validateMCPServer(server: MCPServerConfig): boolean {
+  // Check transport-specific requirements
+  switch (server.transport) {
+    case "stdio":
+      return server.command !== null && server.command.trim().length > 0;
+    case "sse":
+    case "streamable-http":
+    case "http":
+      return server.url !== null && server.url.trim().length > 0;
+    default:
+      return false;
+  }
+}
+
+function normalizeMCPServerRecord(record: StoredMCPServerRecord, index: number): MCPServerConfig | null {
+  const transport = isValidMCPTransport(record.transport) ? record.transport : "stdio";
+
+  const server: MCPServerConfig = {
+    id: normalizeMCPServerId(typeof record.id === "string" ? record.id : undefined, index),
+    name: typeof record.name === "string" ? record.name.trim() : `MCP Server ${index + 1}`,
+    description: typeof record.description === "string" ? record.description.trim() : "",
+    transport,
+    command: typeof record.command === "string" ? record.command.trim() || null : null,
+    args: normalizeMCPStringArray(record.args),
+    env: normalizeMCPKeyValueArray(record.env),
+    url: typeof record.url === "string" ? record.url.trim() || null : null,
+    headers: normalizeMCPKeyValueArray(record.headers),
+    enabled: typeof record.enabled === "boolean" ? record.enabled : true,
+  };
+
+  return server;
+}
+
+function parseStoredMCPServers(rawMCPServers: unknown): MCPServerConfig[] {
+  const usedIds = new Set<string>();
+
+  // Check if it's the new envelope format
+  if (isRecord(rawMCPServers) && Array.isArray(rawMCPServers.servers)) {
+    return rawMCPServers.servers
+      .map((server, index) => {
+        if (!isRecord(server)) {
+          return null;
+        }
+
+        const normalized = normalizeMCPServerRecord(server, index);
+        if (!normalized) {
+          return null;
+        }
+
+        return {
+          ...normalized,
+          id: ensureUniqueMCPServerId(normalized.id, usedIds),
+        };
+      })
+      .filter((server): server is MCPServerConfig => server !== null);
+  }
+
+  // Legacy: plain array format (if someone stored it differently)
+  if (Array.isArray(rawMCPServers)) {
+    return rawMCPServers
+      .map((server, index) => {
+        if (!isRecord(server)) {
+          return null;
+        }
+
+        const normalized = normalizeMCPServerRecord(server, index);
+        if (!normalized) {
+          return null;
+        }
+
+        return {
+          ...normalized,
+          id: ensureUniqueMCPServerId(normalized.id, usedIds),
+        };
+      })
+      .filter((server): server is MCPServerConfig => server !== null);
+  }
+
+  return [];
+}
+
+function serializeMCPServers(servers: MCPServerConfig[]): Prisma.InputJsonValue {
+  const payload: StoredMCPServersEnvelope = {
+    version: MCP_CONFIG_VERSION,
+    servers: servers.map((server) => ({
+      id: server.id,
+      name: server.name,
+      description: server.description,
+      transport: server.transport,
+      command: server.command,
+      args: server.args,
+      env: server.env,
+      url: server.url,
+      headers: server.headers,
+      enabled: server.enabled,
+    })),
+  };
+
+  return payload as Prisma.InputJsonObject;
+}
+
+export function normalizeMCPServerDrafts(drafts: MCPServerDraftInput[]): MCPServerConfig[] {
+  const usedIds = new Set<string>();
+
+  return drafts
+    .map((draft, index) => {
+      const baseId = normalizeMCPServerId(draft.id, index);
+      const id = ensureUniqueMCPServerId(baseId, usedIds);
+      const transport = isValidMCPTransport(draft.transport) ? draft.transport : "stdio";
+
+      return {
+        id,
+        name: draft.name?.trim() || `MCP Server ${index + 1}`,
+        description: draft.description?.trim() || "",
+        transport,
+        command: draft.command?.trim() || null,
+        args: normalizeMCPStringArray(draft.args),
+        env: normalizeMCPKeyValueArray(draft.env),
+        url: draft.url?.trim() || null,
+        headers: normalizeMCPKeyValueArray(draft.headers),
+        enabled: typeof draft.enabled === "boolean" ? draft.enabled : true,
+      };
+    })
+    .filter((server) => server.name.length > 0 || server.command || server.url);
+}
+
+export function validateMCPServerConfig(server: MCPServerConfig): { valid: boolean; error?: string } {
+  if (!server.name || server.name.trim().length === 0) {
+    return { valid: false, error: "MCP server name is required" };
+  }
+
+  switch (server.transport) {
+    case "stdio":
+      if (!server.command || server.command.trim().length === 0) {
+        return { valid: false, error: `MCP server "${server.name}" requires a command for stdio transport` };
+      }
+      break;
+    case "sse":
+    case "streamable-http":
+    case "http":
+      if (!server.url || server.url.trim().length === 0) {
+        return { valid: false, error: `MCP server "${server.name}" requires a URL for ${server.transport} transport` };
+      }
+      break;
+    default:
+      return { valid: false, error: `MCP server "${server.name}" has invalid transport type` };
+  }
+
+  return { valid: true };
+}
+
+// Search config helper types
+type StoredSearchConfigEnvelope = {
+  version: number;
+  enabled?: boolean;
+  apiKey?: string;
+  baseUrl?: string;
+  defaultResultCount?: number;
+};
+
+const DEFAULT_EXA_BASE_URL = "https://api.exa.ai";
+const DEFAULT_RESULT_COUNT = 5;
+
+function normalizeSearchConfig(rawConfig: unknown): SearchConfig {
+  if (!isRecord(rawConfig)) {
+    return {
+      enabled: false,
+      apiKey: null,
+      baseUrl: null,
+      defaultResultCount: DEFAULT_RESULT_COUNT,
+      isConfigured: false,
+    };
+  }
+
+  const envelope = rawConfig as StoredSearchConfigEnvelope;
+  const apiKey = typeof envelope.apiKey === "string" ? envelope.apiKey.trim() : "";
+  const baseUrl = normalizeBaseUrl(envelope.baseUrl) ?? DEFAULT_EXA_BASE_URL;
+  const defaultResultCount = typeof envelope.defaultResultCount === "number"
+    ? Math.max(1, Math.min(20, envelope.defaultResultCount))
+    : DEFAULT_RESULT_COUNT;
+
+  return {
+    enabled: typeof envelope.enabled === "boolean" ? envelope.enabled : false,
+    apiKey: apiKey || null,
+    baseUrl,
+    defaultResultCount,
+    isConfigured: apiKey.length > 0,
+  };
+}
+
+function serializeSearchConfig(config: SearchConfig): Prisma.InputJsonValue {
+  const payload: StoredSearchConfigEnvelope = {
+    version: SEARCH_CONFIG_VERSION,
+    enabled: config.enabled,
+    apiKey: config.apiKey ?? undefined,
+    baseUrl: config.baseUrl ?? undefined,
+    defaultResultCount: config.defaultResultCount,
+  };
+
+  return payload as Prisma.InputJsonObject;
+}
+
+export function normalizeSearchConfigInput(input: SearchConfigInput, existingApiKey?: string | null): SearchConfig {
+  const apiKey = input.apiKey?.trim() ?? existingApiKey ?? "";
+  const baseUrl = normalizeBaseUrl(input.baseUrl) ?? DEFAULT_EXA_BASE_URL;
+  const defaultResultCount = typeof input.defaultResultCount === "number"
+    ? Math.max(1, Math.min(20, input.defaultResultCount))
+    : DEFAULT_RESULT_COUNT;
+
+  return {
+    enabled: typeof input.enabled === "boolean" ? input.enabled : false,
+    apiKey: apiKey || null,
+    baseUrl,
+    defaultResultCount,
+    isConfigured: apiKey.length > 0,
+  };
 }
 
 function normalizeBaseUrl(baseUrl?: string | null): string | null {
@@ -370,6 +744,8 @@ export async function getSystemConfig(): Promise<SystemConfigData | null> {
   }
 
   const providers = parseStoredProviders(config.allowedModels, config.openaiApiKey, config.openaiBaseUrl);
+  const mcpServers = parseStoredMCPServers((config as { mcpServers?: unknown }).mcpServers);
+  const searchConfig = normalizeSearchConfig((config as { searchConfig?: unknown }).searchConfig);
 
   return {
     id: config.id,
@@ -377,6 +753,8 @@ export async function getSystemConfig(): Promise<SystemConfigData | null> {
     openaiBaseUrl: config.openaiBaseUrl,
     allowedModels: buildModelOptions(providers).map((option) => option.id),
     providers,
+    mcpServers,
+    searchConfig,
     updatedAt: config.updatedAt,
     updatedBy: config.updatedBy,
   };
@@ -396,6 +774,20 @@ export async function getPublicConfig(): Promise<PublicConfigData | null> {
     models: provider.models,
   }));
 
+  const publicMCPServers = config.mcpServers.map((server) => ({
+    id: server.id,
+    name: server.name,
+    description: server.description,
+    transport: server.transport,
+    command: server.command,
+    args: server.args,
+    env: server.env,
+    url: server.url,
+    headers: server.headers,
+    enabled: server.enabled,
+    isValid: validateMCPServer(server),
+  }));
+
   return {
     id: config.id,
     hasApiKey: publicProviders.some((provider) => provider.hasApiKey),
@@ -404,6 +796,15 @@ export async function getPublicConfig(): Promise<PublicConfigData | null> {
     providers: publicProviders,
     providerCount: publicProviders.length,
     modelCount: publicProviders.reduce((count, provider) => count + provider.models.length, 0),
+    mcpServers: publicMCPServers,
+    mcpServerCount: publicMCPServers.length,
+    searchConfig: {
+      enabled: config.searchConfig.enabled,
+      apiKeyPresent: config.searchConfig.apiKey !== null && config.searchConfig.apiKey.length > 0,
+      baseUrl: config.searchConfig.baseUrl,
+      defaultResultCount: config.searchConfig.defaultResultCount,
+      isConfigured: config.searchConfig.isConfigured,
+    },
     updatedAt: config.updatedAt,
     updatedBy: config.updatedBy,
   };
@@ -414,6 +815,8 @@ export interface SaveSystemConfigInput {
   openaiApiKey?: string;
   openaiBaseUrl?: string | null;
   allowedModels?: string[];
+  mcpServers?: MCPServerDraftInput[];
+  searchConfig?: SearchConfigInput;
   updatedBy?: string | null;
 }
 
@@ -448,16 +851,44 @@ export async function saveSystemConfig(input: SaveSystemConfigInput): Promise<Sy
     }
   }
 
+  // Process MCP servers if provided
+  const mcpServers = input.mcpServers !== undefined
+    ? normalizeMCPServerDrafts(input.mcpServers)
+    : currentConfig?.mcpServers ?? [];
+
+  // Validate MCP servers if any exist
+  for (const server of mcpServers) {
+    const validation = validateMCPServerConfig(server);
+    if (!validation.valid) {
+      throw new Error(validation.error);
+    }
+  }
+
+  // Process search config if provided
+  const searchConfig = input.searchConfig !== undefined
+    ? normalizeSearchConfigInput(input.searchConfig, currentConfig?.searchConfig?.apiKey)
+    : currentConfig?.searchConfig ?? {
+        enabled: false,
+        apiKey: null,
+        baseUrl: null,
+        defaultResultCount: 5,
+        isConfigured: false,
+      };
+
   const primaryProvider = providers[0];
   const updateData: {
     openaiApiKey: string;
     openaiBaseUrl: string | null;
     allowedModels: Prisma.InputJsonValue;
+    mcpServers: Prisma.InputJsonValue;
+    searchConfig: Prisma.InputJsonValue;
     updatedBy?: string | null;
   } = {
     openaiApiKey: primaryProvider.apiKey,
     openaiBaseUrl: primaryProvider.baseUrl,
     allowedModels: serializeProviders(providers),
+    mcpServers: serializeMCPServers(mcpServers),
+    searchConfig: serializeSearchConfig(searchConfig),
   };
 
   if (input.updatedBy !== undefined) {

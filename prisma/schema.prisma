@@ -19,7 +19,8 @@ model User {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relations (to be used by auth-and-data-model workstream)
-  sessions ChatSession[]
+  sessions    ChatSession[]
+  preferences UserPreference?
 
   @@map("users")
 }
@@ -37,6 +38,10 @@ model SystemConfig {
   openaiBaseUrl String?  @map("openai_base_url")
   // Allowed models stored as JSON array
   allowedModels Json     @default("[]") @map("allowed_models")
+  // MCP servers configuration stored as JSON
+  mcpServers    Json     @default("{\"version\":1,\"servers\":[]}") @map("mcp_servers")
+  // Exa search configuration stored as JSON
+  searchConfig  Json     @default("{\"version\":1}") @map("search_config")
   updatedAt     DateTime @updatedAt @map("updated_at")
   updatedBy     String?  @map("updated_by")
 
@@ -84,4 +89,18 @@ enum MessageRole {
   user
   assistant
   system
+}
+
+// User preferences for chat settings
+model UserPreference {
+  id                 String   @id @default(cuid())
+  userId             String   @unique @map("user_id")
+  chatNetworkEnabled Boolean  @default(true) @map("chat_network_enabled")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
 }

@@ -1,5 +1,5 @@
 import type { Route } from "./+types/layout";
-import { Form, Link, Outlet, useLoaderData } from "react-router";
+import { Form, Link, NavLink, Outlet, useLoaderData } from "react-router";
 import { getSession } from "~/sessions";
 
 export function meta({}: Route.MetaArgs) {
@@ -50,19 +50,100 @@ export default function AdminLayout() {
           </div>
 
           <div className="px-4 py-5">
-            <div className="rounded-[24px] border border-[var(--chat-line)] bg-white/62 p-3">
-              <Link
-                to="/admin"
-                className="flex items-center gap-3 rounded-[18px] bg-[rgba(199,103,58,0.12)] px-4 py-3 text-sm font-medium text-[var(--chat-ink)]"
-              >
-                <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-white/80 text-[var(--chat-accent)]">
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 7h16M4 12h16M4 17h10" />
-                  </svg>
-                </span>
-                Provider settings
-              </Link>
-            </div>
+            <nav className="space-y-6">
+              {/* Overview Section */}
+              <section>
+                <div className="px-3 pb-2 text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--chat-muted)]">
+                  Overview
+                </div>
+                <div className="rounded-[24px] border border-[var(--chat-line)] bg-white/62 p-3">
+                  <NavLink
+                    to="/admin"
+                    end
+                    className={({ isActive }) =>
+                      [
+                        "flex items-center gap-3 rounded-[18px] px-4 py-3 text-sm font-medium transition-colors",
+                        isActive
+                          ? "bg-[rgba(199,103,58,0.12)] text-[var(--chat-ink)]"
+                          : "text-[var(--chat-muted)] hover:bg-white/80 hover:text-[var(--chat-ink)]",
+                      ].join(" ")
+                    }
+                  >
+                    <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-white/80 text-[var(--chat-accent)]">
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z" />
+                      </svg>
+                    </span>
+                    Overview
+                  </NavLink>
+                </div>
+              </section>
+
+              {/* Configuration Section */}
+              <section>
+                <div className="px-3 pb-2 text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--chat-muted)]">
+                  Configuration
+                </div>
+                <div className="rounded-[24px] border border-[var(--chat-line)] bg-white/62 p-3 space-y-1">
+                  <NavLink
+                    to="/admin/providers"
+                    className={({ isActive }) =>
+                      [
+                        "flex items-center gap-3 rounded-[18px] px-4 py-3 text-sm font-medium transition-colors",
+                        isActive
+                          ? "bg-[rgba(199,103,58,0.12)] text-[var(--chat-ink)]"
+                          : "text-[var(--chat-muted)] hover:bg-white/80 hover:text-[var(--chat-ink)]",
+                      ].join(" ")
+                    }
+                  >
+                    <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-white/80 text-[var(--chat-accent)]">
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 7h16M4 12h16M4 17h10" />
+                      </svg>
+                    </span>
+                    Providers
+                  </NavLink>
+
+                  <NavLink
+                    to="/admin/mcp"
+                    className={({ isActive }) =>
+                      [
+                        "flex items-center gap-3 rounded-[18px] px-4 py-3 text-sm font-medium transition-colors",
+                        isActive
+                          ? "bg-[rgba(199,103,58,0.12)] text-[var(--chat-ink)]"
+                          : "text-[var(--chat-muted)] hover:bg-white/80 hover:text-[var(--chat-ink)]",
+                      ].join(" ")
+                    }
+                  >
+                    <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-white/80 text-[var(--chat-accent)]">
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                      </svg>
+                    </span>
+                    MCP
+                  </NavLink>
+
+                  <NavLink
+                    to="/admin/search"
+                    className={({ isActive }) =>
+                      [
+                        "flex items-center gap-3 rounded-[18px] px-4 py-3 text-sm font-medium transition-colors",
+                        isActive
+                          ? "bg-[rgba(199,103,58,0.12)] text-[var(--chat-ink)]"
+                          : "text-[var(--chat-muted)] hover:bg-white/80 hover:text-[var(--chat-ink)]",
+                      ].join(" ")
+                    }
+                  >
+                    <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-white/80 text-[var(--chat-accent)]">
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    </span>
+                    Search
+                  </NavLink>
+                </div>
+              </section>
+            </nav>
           </div>
 
           <div className="mt-auto border-t border-[var(--chat-line)] px-4 py-4">

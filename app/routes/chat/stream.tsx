@@ -6,6 +6,7 @@ import { getSession } from "~/sessions";
  *
  * Event sequence contract:
  * start -> zero or more (reasoning | token) -> complete -> zero or one suggestions
+ * notice can appear at any point for non-fatal warnings/info
  * error can terminate at any point on failure paths
  */
 type SSEEvent =
@@ -14,6 +15,7 @@ type SSEEvent =
   | { type: "reasoning"; content: string }
   | { type: "complete"; messageId: string; content: string }
   | { type: "suggestions"; messageId: string; questions: string[] }
+  | { type: "notice"; level: "info" | "warning"; message: string }
   | { type: "error"; message: string };
 
 /**
@@ -55,13 +57,22 @@ export async function action({ request, params }: Route.ActionArgs) {
   }
 
   // Parse request body
-  let content: string;
+  let content: string | undefined;
   let model: string | undefined;
+  let intent: "send" | "edit-last-user" | "regenerate-last-assistant" = "send";
+  let messageId: string | undefined;
+  let networkEnabled: boolean | undefined;
   try {
     const body = await request.json();
-    content = body.content;
+    content = typeof body.content === "string" ? body.content : undefined;
     model = typeof body.model === "string" ? body.model : undefined;
-    if (!content || typeof content !== "string" || content.trim() === "") {
+    intent = body.intent === "edit-last-user" || body.intent === "regenerate-last-assistant"
+      ? body.intent
+      : "send";
+    messageId = typeof body.messageId === "string" ? body.messageId : undefined;
+    networkEnabled = typeof body.networkEnabled === "boolean" ? body.networkEnabled : undefined;
+
+    if ((intent === "send" || intent === "edit-last-user") && (!content || content.trim() === "")) {
       return new Response("Message content is required", { status: 400 });
     }
   } catch {
@@ -76,7 +87,14 @@ export async function action({ request, params }: Route.ActionArgs) {
       try {
         await sendMessageStream(
           user,
-          { sessionId, content: content.trim(), model },
+          {
+            sessionId,
+            content: content?.trim(),
+            model,
+            intent,
+            messageId,
+            networkEnabled,
+          },
           async (event) => {
             const sseData = serializeSSE(event);
             controller.enqueue(encoder.encode(sseData));
