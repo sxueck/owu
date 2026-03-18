@@ -4,8 +4,8 @@ import { getSession, commitSession } from "~/sessions";
 
 export function meta({}: Route.MetaArgs) {
   return [
-    { title: "Register - OWU" },
-    { name: "description", content: "Create an OWU account" },
+    { title: "注册 - OWU" },
+    { name: "description", content: "创建 OWU 账户" },
   ];
 }
 
@@ -66,7 +66,7 @@ export async function action({ request }: Route.ActionArgs) {
   
   // Confirm password
   if (password !== confirmPassword) {
-    errors.confirmPassword = "Passwords do not match";
+    errors.confirmPassword = "两次输入的密码不一致";
   }
   
   if (Object.keys(errors).length > 0) {
@@ -104,27 +104,22 @@ export default function RegisterPage() {
   const isSubmitting = navigation.state === "submitting";
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 py-12 bg-gray-50 dark:bg-gray-950">
-      <div className="w-full max-w-md animate-slide-up">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <Link to="/" className="inline-block">
-            <div className="w-14 h-14 bg-gradient-to-br from-blue-600 to-blue-700 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-600/20">
-              <span className="text-white font-bold text-2xl">O</span>
-            </div>
-          </Link>
-          <h1 className="text-2xl font-bold tracking-tight">Create account</h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-2">
-            Get started with OWU today
+    <div className="min-h-screen flex items-center justify-center px-4 py-12 bg-white">
+      <div className="w-full max-w-[420px] animate-slide-up">
+        {/* Header */}
+        <div className="text-center mb-10">
+          <h1 className="text-[2rem] font-semibold tracking-[-0.03em] text-[var(--chat-ink)]">创建账户</h1>
+          <p className="text-[var(--chat-muted)] mt-3 text-[15px]">
+            开始使用 OWU
           </p>
         </div>
 
         {/* Register Card */}
-        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm">
+        <div className="rounded-[24px] border border-[var(--chat-line)] bg-white p-6 shadow-[0_24px_48px_rgba(15,23,42,0.06)]">
           <Form method="post" className="space-y-5">
             {/* General error */}
             {actionData?.errors?.general && (
-              <div className="p-4 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-sm animate-fade-in">
+              <div className="mb-4 rounded-[16px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 animate-fade-in">
                 <div className="flex items-start gap-2">
                   <svg className="w-5 h-5 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
@@ -138,31 +133,31 @@ export default function RegisterPage() {
             <div>
               <label
                 htmlFor="username"
-                className="block text-sm font-medium mb-1.5 text-gray-700 dark:text-gray-300"
+                className="block text-sm font-medium mb-2 text-[var(--chat-ink)]"
               >
-                Username
+                用户名
               </label>
               <input
                 type="text"
                 id="username"
                 name="username"
                 defaultValue={actionData?.values?.username || ""}
-                placeholder="johndoe"
-                className={`w-full px-4 py-2.5 rounded-xl border bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
+                placeholder="请输入用户名"
+                className={`w-full px-4 py-3 rounded-[16px] border bg-white focus:outline-none transition-all ${
                   actionData?.errors?.username
-                    ? 'border-red-500 focus:border-red-500'
-                    : 'border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600'
+                    ? 'border-red-300 focus:border-red-400 focus:ring-2 focus:ring-red-100'
+                    : 'border-[var(--chat-line)] hover:border-[var(--chat-accent)]/40 focus:border-[var(--chat-accent)] focus:ring-2 focus:ring-[var(--chat-accent-soft)]'
                 }`}
                 autoComplete="username"
                 autoFocus
               />
               {actionData?.errors?.username ? (
-                <p className="mt-1.5 text-sm text-red-600 dark:text-red-400">
+                <p className="mt-2 text-sm text-red-600">
                   {actionData.errors.username}
                 </p>
               ) : (
-                <p className="mt-1.5 text-xs text-gray-500">
-                  3-30 characters, letters, numbers, and underscores only
+                <p className="mt-2 text-xs text-[var(--chat-muted)]">
+                  3-30 个字符，仅支持字母、数字和下划线
                 </p>
               )}
             </div>
@@ -171,25 +166,25 @@ export default function RegisterPage() {
             <div>
               <label
                 htmlFor="email"
-                className="block text-sm font-medium mb-1.5 text-gray-700 dark:text-gray-300"
+                className="block text-sm font-medium mb-2 text-[var(--chat-ink)]"
               >
-                Email
+                邮箱
               </label>
               <input
                 type="email"
                 id="email"
                 name="email"
                 defaultValue={actionData?.values?.email || ""}
-                placeholder="you@example.com"
-                className={`w-full px-4 py-2.5 rounded-xl border bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
+                placeholder="请输入邮箱地址"
+                className={`w-full px-4 py-3 rounded-[16px] border bg-white focus:outline-none transition-all ${
                   actionData?.errors?.email
-                    ? 'border-red-500 focus:border-red-500'
-                    : 'border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600'
+                    ? 'border-red-300 focus:border-red-400 focus:ring-2 focus:ring-red-100'
+                    : 'border-[var(--chat-line)] hover:border-[var(--chat-accent)]/40 focus:border-[var(--chat-accent)] focus:ring-2 focus:ring-[var(--chat-accent-soft)]'
                 }`}
                 autoComplete="email"
               />
               {actionData?.errors?.email && (
-                <p className="mt-1.5 text-sm text-red-600 dark:text-red-400">
+                <p className="mt-2 text-sm text-red-600">
                   {actionData.errors.email}
                 </p>
               )}
@@ -199,29 +194,29 @@ export default function RegisterPage() {
             <div>
               <label
                 htmlFor="password"
-                className="block text-sm font-medium mb-1.5 text-gray-700 dark:text-gray-300"
+                className="block text-sm font-medium mb-2 text-[var(--chat-ink)]"
               >
-                Password
+                密码
               </label>
               <input
                 type="password"
                 id="password"
                 name="password"
-                placeholder="••••••••"
-                className={`w-full px-4 py-2.5 rounded-xl border bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
+                placeholder="请输入密码"
+                className={`w-full px-4 py-3 rounded-[16px] border bg-white focus:outline-none transition-all ${
                   actionData?.errors?.password
-                    ? 'border-red-500 focus:border-red-500'
-                    : 'border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600'
+                    ? 'border-red-300 focus:border-red-400 focus:ring-2 focus:ring-red-100'
+                    : 'border-[var(--chat-line)] hover:border-[var(--chat-accent)]/40 focus:border-[var(--chat-accent)] focus:ring-2 focus:ring-[var(--chat-accent-soft)]'
                 }`}
                 autoComplete="new-password"
               />
               {actionData?.errors?.password ? (
-                <p className="mt-1.5 text-sm text-red-600 dark:text-red-400">
+                <p className="mt-2 text-sm text-red-600">
                   {actionData.errors.password}
                 </p>
               ) : (
-                <p className="mt-1.5 text-xs text-gray-500">
-                  At least 8 characters with uppercase, lowercase, and number
+                <p className="mt-2 text-xs text-[var(--chat-muted)]">
+                  至少 8 个字符，包含大小写字母和数字
                 </p>
               )}
             </div>
@@ -230,24 +225,24 @@ export default function RegisterPage() {
             <div>
               <label
                 htmlFor="confirmPassword"
-                className="block text-sm font-medium mb-1.5 text-gray-700 dark:text-gray-300"
+                className="block text-sm font-medium mb-2 text-[var(--chat-ink)]"
               >
-                Confirm Password
+                确认密码
               </label>
               <input
                 type="password"
                 id="confirmPassword"
                 name="confirmPassword"
-                placeholder="••••••••"
-                className={`w-full px-4 py-2.5 rounded-xl border bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
+                placeholder="请再次输入密码"
+                className={`w-full px-4 py-3 rounded-[16px] border bg-white focus:outline-none transition-all ${
                   actionData?.errors?.confirmPassword
-                    ? 'border-red-500 focus:border-red-500'
-                    : 'border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600'
+                    ? 'border-red-300 focus:border-red-400 focus:ring-2 focus:ring-red-100'
+                    : 'border-[var(--chat-line)] hover:border-[var(--chat-accent)]/40 focus:border-[var(--chat-accent)] focus:ring-2 focus:ring-[var(--chat-accent-soft)]'
                 }`}
                 autoComplete="new-password"
               />
               {actionData?.errors?.confirmPassword && (
-                <p className="mt-1.5 text-sm text-red-600 dark:text-red-400">
+                <p className="mt-2 text-sm text-red-600">
                   {actionData.errors.confirmPassword}
                 </p>
               )}
@@ -257,29 +252,29 @@ export default function RegisterPage() {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full bg-blue-600 text-white py-2.5 rounded-xl font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-gray-900 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-blue-600 shadow-sm"
+              className="w-full bg-[var(--chat-forest)] text-white py-3 rounded-full font-medium hover:bg-[#1b4fb9] focus:outline-none focus:ring-2 focus:ring-[var(--chat-accent)] focus:ring-offset-2 focus:ring-offset-white disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-[var(--chat-forest)] transition-all duration-200"
             >
               {isSubmitting ? (
                 <span className="flex items-center justify-center gap-2">
                   <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                   </svg>
-                  Creating account...
+                  创建账户中...
                 </span>
               ) : (
-                "Create Account"
+                "创建账户"
               )}
             </button>
           </Form>
 
-          <div className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
-            Already have an account?{" "}
+          <div className="mt-6 text-center text-sm text-[var(--chat-muted)]">
+            已有账户？{" "}
             <Link
               to="/login"
-              className="text-blue-600 hover:text-blue-700 font-medium hover:underline"
+              className="text-[var(--chat-accent)] hover:text-[#1b4fb9] font-medium"
             >
-              Sign in
+              立即登录
             </Link>
           </div>
         </div>

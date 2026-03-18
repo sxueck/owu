@@ -17,6 +17,7 @@
     "db:reset": "prisma migrate reset --force && npm run db:seed"
   },
   "dependencies": {
+    "@microsoft/fetch-event-source": "^2.0.1",
     "@prisma/client": "^6.5.0",
     "@react-router/node": "7.13.0",
     "@react-router/serve": "7.13.0",

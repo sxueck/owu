@@ -18,6 +18,7 @@ export interface ChatCompletionOptions {
 export interface ChatCompletionResult {
   content: string;
   model: string;
+  reasoning?: string;
   usage?: {
     promptTokens: number;
     completionTokens: number;
@@ -117,7 +118,7 @@ export async function sendChatCompletion(options: ChatCompletionOptions): Promis
     const response = await client.chat.completions.create({
       model: options.model,
       messages: options.messages,
-      temperature: options.temperature ?? 0.7,
+      temperature: options.temperature ?? 1,
       max_tokens: options.maxTokens,
     });
 
@@ -150,10 +151,36 @@ export async function sendChatCompletion(options: ChatCompletionOptions): Promis
   }
 }
 
+/**
+ * Safely extract reasoning content from delta object.
+ * Supports various provider formats in a best-effort manner.
+ * Returns null if no reasoning content found (silent fallback).
+ */
+function extractReasoningFromDelta(delta: unknown): string | null {
+  if (!delta || typeof delta !== "object") {
+    return null;
+  }
+
+  const d = delta as Record<string, unknown>;
+
+  // Check common reasoning field names across providers
+  const reasoningFields = ["reasoning_content", "thinking", "reasoning"];
+
+  for (const field of reasoningFields) {
+    const value = d[field];
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
 export async function streamChatCompletion(
   options: ChatCompletionOptions,
   callbacks: {
     onToken: (token: string) => void | Promise<void>;
+    onReasoning?: (content: string) => void | Promise<void>;
     onComplete: (result: ChatCompletionResult) => void | Promise<void>;
     onError: (error: Error) => void | Promise<void>;
   },
@@ -164,22 +191,32 @@ export async function streamChatCompletion(
     const stream = await client.chat.completions.create({
       model: options.model,
       messages: options.messages,
-      temperature: options.temperature ?? 0.7,
+      temperature: options.temperature ?? 1,
       max_tokens: options.maxTokens,
       stream: true,
     });
 
     let fullContent = "";
+    let fullReasoning = "";
     let model = options.model;
     let promptTokens = 0;
     let completionTokens = 0;
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
+
+      // Handle main content tokens
       if (delta?.content) {
         const token = delta.content;
         fullContent += token;
         await callbacks.onToken(token);
+      }
+
+      // Handle reasoning tokens (best effort - silent fallback if not present)
+      const reasoningContent = extractReasoningFromDelta(delta);
+      if (reasoningContent && callbacks.onReasoning) {
+        fullReasoning += reasoningContent;
+        await callbacks.onReasoning(reasoningContent);
       }
 
       if (chunk.model) {
@@ -195,6 +232,7 @@ export async function streamChatCompletion(
     await callbacks.onComplete({
       content: fullContent,
       model,
+      reasoning: fullReasoning.length > 0 ? fullReasoning : undefined,
       usage:
         promptTokens > 0 || completionTokens > 0
           ? {

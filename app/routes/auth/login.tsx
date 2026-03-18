@@ -77,27 +77,22 @@ export default function LoginPage() {
   const isSubmitting = navigation.state === "submitting";
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 py-12 bg-gray-50 dark:bg-gray-950">
-      <div className="w-full max-w-md animate-slide-up">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <Link to="/" className="inline-block">
-            <div className="w-14 h-14 bg-gradient-to-br from-blue-600 to-blue-700 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-600/20">
-              <span className="text-white font-bold text-2xl">O</span>
-            </div>
-          </Link>
-          <h1 className="text-2xl font-bold tracking-tight">欢迎回来</h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-2">
+    <div className="min-h-screen flex items-center justify-center px-4 py-12 bg-white">
+      <div className="w-full max-w-[420px] animate-slide-up">
+        {/* Header */}
+        <div className="text-center mb-10">
+          <h1 className="text-[2rem] font-semibold tracking-[-0.03em] text-[var(--chat-ink)]">欢迎回来</h1>
+          <p className="text-[var(--chat-muted)] mt-3 text-[15px]">
             登录您的 OWU 账户
           </p>
         </div>
 
         {/* Login Card */}
-        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 shadow-sm">
+        <div className="rounded-[24px] border border-[var(--chat-line)] bg-white p-6 shadow-[0_24px_48px_rgba(15,23,42,0.06)]">
           <Form method="post" className="space-y-5">
             {/* General error */}
             {actionData?.errors?.general && (
-              <div className="p-4 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-sm animate-fade-in">
+              <div className="mb-4 rounded-[16px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 animate-fade-in">
                 <div className="flex items-start gap-2">
                   <svg className="w-5 h-5 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
@@ -111,7 +106,7 @@ export default function LoginPage() {
             <div>
               <label
                 htmlFor="emailOrUsername"
-                className="block text-sm font-medium mb-1.5 text-gray-700 dark:text-gray-300"
+                className="block text-sm font-medium mb-2 text-[var(--chat-ink)]"
               >
                 邮箱或用户名
               </label>
@@ -120,17 +115,17 @@ export default function LoginPage() {
                 id="emailOrUsername"
                 name="emailOrUsername"
                 defaultValue={actionData?.values?.emailOrUsername || ""}
-                placeholder="you@example.com"
-                className={`w-full px-4 py-2.5 rounded-xl border bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
+                placeholder="请输入邮箱或用户名"
+                className={`w-full px-4 py-3 rounded-[16px] border bg-white focus:outline-none transition-all ${
                   actionData?.errors?.emailOrUsername
-                    ? 'border-red-500 focus:border-red-500'
-                    : 'border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600'
+                    ? 'border-red-300 focus:border-red-400 focus:ring-2 focus:ring-red-100'
+                    : 'border-[var(--chat-line)] hover:border-[var(--chat-accent)]/40 focus:border-[var(--chat-accent)] focus:ring-2 focus:ring-[var(--chat-accent-soft)]'
                 }`}
                 autoComplete="username"
                 autoFocus
               />
               {actionData?.errors?.emailOrUsername && (
-                <p className="mt-1.5 text-sm text-red-600 dark:text-red-400">
+                <p className="mt-2 text-sm text-red-600">
                   {actionData.errors.emailOrUsername}
                 </p>
               )}
@@ -140,7 +135,7 @@ export default function LoginPage() {
             <div>
               <label
                 htmlFor="password"
-                className="block text-sm font-medium mb-1.5 text-gray-700 dark:text-gray-300"
+                className="block text-sm font-medium mb-2 text-[var(--chat-ink)]"
               >
                 密码
               </label>
@@ -149,15 +144,15 @@ export default function LoginPage() {
                 id="password"
                 name="password"
                 placeholder="请输入密码"
-                className={`w-full px-4 py-2.5 rounded-xl border bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
+                className={`w-full px-4 py-3 rounded-[16px] border bg-white focus:outline-none transition-all ${
                   actionData?.errors?.password
-                    ? 'border-red-500 focus:border-red-500'
-                    : 'border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600'
+                    ? 'border-red-300 focus:border-red-400 focus:ring-2 focus:ring-red-100'
+                    : 'border-[var(--chat-line)] hover:border-[var(--chat-accent)]/40 focus:border-[var(--chat-accent)] focus:ring-2 focus:ring-[var(--chat-accent-soft)]'
                 }`}
                 autoComplete="current-password"
               />
               {actionData?.errors?.password && (
-                <p className="mt-1.5 text-sm text-red-600 dark:text-red-400">
+                <p className="mt-2 text-sm text-red-600">
                   {actionData.errors.password}
                 </p>
               )}
@@ -167,7 +162,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full bg-blue-600 text-white py-2.5 rounded-xl font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-gray-900 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-blue-600 shadow-sm"
+              className="w-full bg-[var(--chat-forest)] text-white py-3 rounded-full font-medium hover:bg-[#1b4fb9] focus:outline-none focus:ring-2 focus:ring-[var(--chat-accent)] focus:ring-offset-2 focus:ring-offset-white disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-[var(--chat-forest)] transition-all duration-200"
             >
               {isSubmitting ? (
                 <span className="flex items-center justify-center gap-2">
@@ -183,23 +178,17 @@ export default function LoginPage() {
             </button>
           </Form>
 
-          <div className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
+          <div className="mt-6 text-center text-sm text-[var(--chat-muted)]">
             还没有账户？{" "}
             <Link
               to="/register"
-              className="text-blue-600 hover:text-blue-700 font-medium hover:underline"
+              className="text-[var(--chat-accent)] hover:text-[#1b4fb9] font-medium"
             >
               立即注册
             </Link>
           </div>
         </div>
 
-        {/* Hint for default admin */}
-        <div className="mt-8 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800">
-          <p className="text-xs text-blue-700 dark:text-blue-400 text-center">
-            <strong>默认管理员：</strong>用户名 <code className="bg-blue-100 dark:bg-blue-800 px-1.5 py-0.5 rounded">admin</code>，密码 <code className="bg-blue-100 dark:bg-blue-800 px-1.5 py-0.5 rounded">admin123</code>
-          </p>
-        </div>
       </div>
     </div>
   );

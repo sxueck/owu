@@ -1,9 +1,11 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from './db.server';
 import {
   sendChatCompletion,
   streamChatCompletion,
   type ChatCompletionMessage,
   type ChatCompletionResult,
+  type ChatCompletionOptions,
 } from './openai.server';
 import {
   getAvailableModelOptions,
@@ -42,6 +44,8 @@ export interface ChatMessageOutput {
   role: 'user' | 'assistant' | 'system';
   model?: string | null;
   content: string;
+  reasoning?: string | null;
+  followUpQuestions?: string[] | null;
   createdAt: Date;
 }
 
@@ -170,19 +174,36 @@ export async function sendMessage(
     });
 
     // Step 5: Save assistant response
-    const assistantMessage = await prisma.chatMessage.create({
-      data: {
-        sessionId: input.sessionId,
-        role: 'assistant',
-        model: resolvedModel.id,
-        content: completion.content,
-      },
-    });
+    const assistantMessage = await prisma.$transaction(async (tx) => {
+      const createdAssistantMessage = await tx.chatMessage.create({
+        data: {
+          sessionId: input.sessionId,
+          role: 'assistant',
+          model: resolvedModel.id,
+          content: completion.content,
+        },
+      });
 
-    // Update session's updatedAt timestamp
-    await prisma.chatSession.update({
-      where: { id: input.sessionId },
-      data: { updatedAt: new Date() },
+      await tx.chatMessage.updateMany({
+        where: {
+          sessionId: input.sessionId,
+          role: 'assistant',
+          id: { not: createdAssistantMessage.id },
+          followUpQuestions: {
+            not: Prisma.DbNull,
+          },
+        },
+        data: {
+          followUpQuestions: Prisma.DbNull,
+        },
+      });
+
+      await tx.chatSession.update({
+        where: { id: input.sessionId },
+        data: { updatedAt: new Date() },
+      });
+
+      return createdAssistantMessage;
     });
 
     return {
@@ -282,12 +303,92 @@ export async function getChatSessionMeta(
 
 /**
  * SSE event types for streaming chat
+ *
+ * Event sequence contract:
+ * start -> zero or more (reasoning | token) -> complete -> zero or one suggestions
+ * error can terminate at any point on failure paths
  */
 export type SSEEvent =
   | { type: 'start'; sessionId: string; model: string }
   | { type: 'token'; content: string }
+  | { type: 'reasoning'; content: string }
   | { type: 'complete'; messageId: string; content: string }
+  | { type: 'suggestions'; messageId: string; questions: string[] }
   | { type: 'error'; message: string };
+
+/**
+ * System prompt for generating follow-up questions
+ */
+const FOLLOWUP_GENERATION_PROMPT = `Based on the conversation history and the assistant's last response, generate 5 relevant follow-up questions that the user might want to ask next.
+
+Requirements:
+- Questions should be concise (max 100 characters each)
+- Questions should naturally continue the conversation flow
+- Questions should be from the user's perspective
+- Format: Return ONLY a JSON array of 5 strings, no markdown, no explanation
+- Example: ["Can you explain that in more detail?", "What are the alternatives?", "How does this compare to X?", "What are the potential risks?", "Can you provide an example?"]
+
+Conversation context:`;
+
+/**
+ * Parse follow-up questions from model response
+ * Best effort parsing - returns empty array on failure (silent fallback)
+ */
+function parseFollowUpQuestions(content: string): string[] {
+  try {
+    // Try to parse as JSON array
+    const parsed = JSON.parse(content.trim());
+    if (Array.isArray(parsed)) {
+      // Filter to valid strings, limit to 5, clean up
+      return parsed
+        .filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
+        .slice(0, 5)
+        .map(q => q.trim());
+    }
+  } catch {
+    // Silent fallback - parsing failed
+  }
+  return [];
+}
+
+/**
+ * Generate follow-up questions based on conversation context
+ * This is a best-effort operation - failures are silently ignored
+ */
+async function generateFollowUpQuestions(
+  modelConfig: { model: string; provider: ChatCompletionOptions['provider'] },
+  conversationHistory: ChatCompletionMessage[],
+  assistantResponse: string
+): Promise<string[]> {
+  try {
+    // Build context for follow-up generation
+    const contextMessages: ChatCompletionMessage[] = [
+      ...conversationHistory,
+      {
+        role: 'assistant',
+        content: assistantResponse,
+      },
+      {
+        role: 'user',
+        content: FOLLOWUP_GENERATION_PROMPT,
+      },
+    ];
+
+    const result = await sendChatCompletion({
+      model: modelConfig.model,
+      provider: modelConfig.provider,
+      messages: contextMessages,
+      temperature: 1,
+      maxTokens: 500,
+    });
+
+    return parseFollowUpQuestions(result.content);
+  } catch (error) {
+    // Silent fallback - follow-up generation should not affect main flow
+    console.warn('Follow-up questions generation failed:', error instanceof Error ? error.message : 'Unknown error');
+    return [];
+  }
+}
 
 /**
  * Send a message in a chat session with streaming response.
@@ -373,21 +474,44 @@ export async function sendMessageStream(
         onToken: async (token: string) => {
           await onEvent({ type: 'token', content: token });
         },
+        onReasoning: async (content: string) => {
+          // Forward reasoning chunks to client for live display
+          await onEvent({ type: 'reasoning', content });
+        },
         onComplete: async (result: ChatCompletionResult) => {
           // Step 6: Only save assistant response after successful completion
-          const assistantMessage = await prisma.chatMessage.create({
-            data: {
-              sessionId: input.sessionId,
-              role: 'assistant',
-              model: resolvedModel.id,
-              content: result.content,
-            },
-          });
+          // Include reasoning if present (best effort - may be undefined for non-reasoning models)
+          const assistantMessage = await prisma.$transaction(async (tx) => {
+            const createdAssistantMessage = await tx.chatMessage.create({
+              data: {
+                sessionId: input.sessionId,
+                role: 'assistant',
+                model: resolvedModel.id,
+                content: result.content,
+                reasoning: result.reasoning || null,
+              },
+            });
 
-          // Update session's updatedAt timestamp
-          await prisma.chatSession.update({
-            where: { id: input.sessionId },
-            data: { updatedAt: new Date() },
+            await tx.chatMessage.updateMany({
+              where: {
+                sessionId: input.sessionId,
+                role: 'assistant',
+                id: { not: createdAssistantMessage.id },
+                followUpQuestions: {
+                  not: Prisma.DbNull,
+                },
+              },
+              data: {
+                followUpQuestions: Prisma.DbNull,
+              },
+            });
+
+            await tx.chatSession.update({
+              where: { id: input.sessionId },
+              data: { updatedAt: new Date() },
+            });
+
+            return createdAssistantMessage;
           });
 
           await onEvent({
@@ -395,6 +519,35 @@ export async function sendMessageStream(
             messageId: assistantMessage.id,
             content: result.content,
           });
+
+          // Step 7: Generate follow-up questions (best effort, non-blocking)
+          // This runs after complete event to not delay the main response
+          try {
+            const followUpQuestions = await generateFollowUpQuestions(
+              { model: resolvedModel.model, provider: resolvedModel.provider },
+              messages,
+              result.content
+            );
+
+            if (followUpQuestions.length > 0) {
+              // Persist follow-up questions to database
+              await prisma.chatMessage.update({
+                where: { id: assistantMessage.id },
+                data: { followUpQuestions },
+              });
+
+              // Send suggestions event to client
+              await onEvent({
+                type: 'suggestions',
+                messageId: assistantMessage.id,
+                questions: followUpQuestions,
+              });
+            }
+          } catch (suggestionError) {
+            // Silent fallback - suggestions failure should not affect main flow
+            console.warn('Failed to generate or save follow-up questions:',
+              suggestionError instanceof Error ? suggestionError.message : 'Unknown error');
+          }
         },
         onError: async (error: Error) => {
           await onEvent({ type: 'error', message: error.message });

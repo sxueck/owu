@@ -4,6 +4,7 @@ import { getSession } from "~/sessions";
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { fetchEventSource } from "@microsoft/fetch-event-source";
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -51,10 +52,19 @@ interface ChatModelOption {
   label: string;
 }
 
+/**
+ * SSE event types for streaming chat
+ *
+ * Event sequence contract:
+ * start -> zero or more (reasoning | token) -> complete -> zero or one suggestions
+ * error can terminate at any point on failure paths
+ */
 type SSEEvent =
   | { type: "start"; sessionId: string; model: string }
   | { type: "token"; content: string }
+  | { type: "reasoning"; content: string }
   | { type: "complete"; messageId: string; content: string }
+  | { type: "suggestions"; messageId: string; questions: string[] }
   | { type: "error"; message: string };
 
 export function meta({ data }: Route.MetaArgs) {
@@ -82,6 +92,8 @@ interface LoaderData {
     model: string | null;
     modelLabel: string | null;
     content: string;
+    reasoning?: string | null;
+    followUpQuestions?: string[] | null;
     createdAt: Date;
   }>;
 }
@@ -131,8 +143,8 @@ function MessageContent({ content }: { content: string }) {
         remarkPlugins={[remarkGfm]}
         components={{
           p: ({ children }) => <p className="mb-3 leading-7 last:mb-0">{children}</p>,
-          h1: ({ children }) => <h1 className="mb-4 mt-6 text-2xl font-bold text-[var(--chat-ink)]">{children}</h1>,
-          h2: ({ children }) => <h2 className="mb-3 mt-5 text-xl font-bold text-[var(--chat-ink)]">{children}</h2>,
+          h1: ({ children }) => <h1 className="mb-4 mt-6 text-2xl font-semibold text-[var(--chat-ink)]">{children}</h1>,
+          h2: ({ children }) => <h2 className="mb-3 mt-5 text-xl font-semibold text-[var(--chat-ink)]">{children}</h2>,
           h3: ({ children }) => <h3 className="mb-3 mt-4 text-lg font-semibold text-[var(--chat-ink)]">{children}</h3>,
           h4: ({ children }) => <h4 className="mb-2 mt-4 text-base font-semibold text-[var(--chat-ink)]">{children}</h4>,
           h5: ({ children }) => <h5 className="mb-2 mt-3 text-sm font-semibold text-[var(--chat-ink)]">{children}</h5>,
@@ -146,7 +158,7 @@ function MessageContent({ content }: { content: string }) {
             
             if (isInline) {
               return (
-                <code className="rounded-md bg-[rgba(20,33,28,0.08)] px-1.5 py-0.5 font-mono text-[0.9em] transition-colors duration-150 hover:bg-[rgba(20,33,28,0.12)]" {...props}>
+                <code className="rounded-md bg-[rgba(20,33,28,0.08)] px-1.5 py-0.5 text-[0.9em] transition-colors duration-150 hover:bg-[rgba(20,33,28,0.12)]" style={{ fontFamily: 'var(--font-mono)' }} {...props}>
                   {children}
                 </code>
               );
@@ -168,8 +180,8 @@ function MessageContent({ content }: { content: string }) {
                   <CopyButton text={codeString} />
                 </div>
                 <div className="relative">
-                  <pre className="overflow-x-auto p-4 text-[13px] leading-relaxed text-white/90">
-                    <code className={`${className} font-mono`} {...props}>{children}</code>
+                  <pre className="overflow-x-auto p-4 text-[13px] leading-relaxed text-white/90" style={{ fontFamily: 'var(--font-mono)' }}>
+                    <code className={className} style={{ fontFamily: 'var(--font-mono)' }} {...props}>{children}</code>
                   </pre>
                 </div>
               </div>
@@ -199,7 +211,7 @@ function MessageContent({ content }: { content: string }) {
           tr: ({ children }) => <tr className="border-b border-[var(--chat-line)] last:border-b-0">{children}</tr>,
           th: ({ children }) => <th className="px-3 py-2 text-left font-semibold text-[var(--chat-ink)]">{children}</th>,
           td: ({ children }) => <td className="px-3 py-2 text-[var(--chat-ink)]">{children}</td>,
-          strong: ({ children }) => <strong className="font-semibold text-[var(--chat-ink)]">{children}</strong>,
+          strong: ({ children }) => <strong className="font-bold text-[var(--chat-ink)]">{children}</strong>,
           em: ({ children }) => <em className="italic">{children}</em>,
           del: ({ children }) => <del className="line-through text-[var(--chat-muted)]">{children}</del>,
         }}
@@ -210,21 +222,98 @@ function MessageContent({ content }: { content: string }) {
   );
 }
 
-function MessageCard({
-  role,
-  content,
-  createdAt,
-  pending,
-  assistantLabel,
+function ReasoningPanel({ reasoning }: { reasoning: string }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  return (
+    <div className="mt-3 mb-3 rounded-lg border border-[var(--chat-line)] bg-[rgba(20,33,28,0.03)] overflow-hidden">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium text-[var(--chat-muted)] hover:text-[var(--chat-ink)] hover:bg-[rgba(20,33,28,0.05)] transition-colors"
+      >
+        <span className="flex items-center gap-1.5">
+          <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+          </svg>
+          思考过程
+        </span>
+        <svg
+          className={["h-4 w-4 transition-transform duration-200", isExpanded ? "rotate-180" : ""].join(" ")}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {isExpanded && (
+        <div className="px-3 py-2 text-xs text-[var(--chat-muted)] border-t border-[var(--chat-line)] bg-[rgba(20,33,28,0.02)]">
+          <pre className="whitespace-pre-wrap leading-relaxed" style={{ fontFamily: 'var(--font-mono)' }}>{reasoning}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FollowUpQuestions({
+  questions,
+  onQuestionClick,
 }: {
+  questions: string[];
+  onQuestionClick: (question: string) => void;
+}) {
+  if (!questions || questions.length === 0) return null;
+
+  return (
+    <div className="mt-4 pt-3 border-t border-[var(--chat-line)]">
+      <div className="text-xs font-medium text-[var(--chat-muted)] mb-2 flex items-center gap-1.5">
+        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        你可能还想问
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {questions.map((question, index) => (
+          <button
+            key={index}
+            onClick={() => onQuestionClick(question)}
+            className="text-left text-sm px-3 py-1.5 rounded-full border border-[var(--chat-line)] bg-white text-[var(--chat-ink)] hover:border-[var(--chat-accent)] hover:text-[var(--chat-accent)] transition-colors duration-200 max-w-[280px] truncate"
+            title={question}
+          >
+            {question}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface MessageCardProps {
   role: "user" | "assistant" | "system";
   content: string;
+  reasoning?: string | null;
+  followUpQuestions?: string[] | null;
   createdAt?: Date;
   pending?: boolean;
   assistantLabel?: string;
-}) {
+  onQuestionClick?: (question: string) => void;
+}
+
+function MessageCard({
+  role,
+  content,
+  reasoning,
+  followUpQuestions,
+  createdAt,
+  pending,
+  assistantLabel,
+  onQuestionClick,
+}: MessageCardProps) {
   const isUser = role === "user";
-  const label = isUser ? "You" : role === "assistant" ? assistantLabel || "Assistant" : "System";
+  const isAssistant = role === "assistant";
+  const label = isUser ? "You" : isAssistant ? assistantLabel || "Assistant" : "System";
+  const hasReasoning = isAssistant && reasoning && reasoning.length > 0;
+  const hasFollowUp = isAssistant && followUpQuestions && followUpQuestions.length > 0;
 
   return (
     <article
@@ -248,32 +337,67 @@ function MessageCard({
           </span>
         ) : null}
       </div>
+      {hasReasoning && <ReasoningPanel reasoning={reasoning} />}
       <div className="text-[15px] text-[var(--chat-ink)]">
-        <MessageContent content={content} />
+        {isUser ? (
+          <div className="whitespace-pre-wrap">{content}</div>
+        ) : (
+          <MessageContent content={content} />
+        )}
         {pending && <span className="ml-1 inline-block h-4 w-1.5 animate-pulse rounded-full bg-[var(--chat-accent)] align-middle" />}
       </div>
+      {hasFollowUp && (
+        <FollowUpQuestions questions={followUpQuestions} onQuestionClick={onQuestionClick || (() => {})} />
+      )}
     </article>
   );
+}
+
+interface PendingAssistantMessage {
+  id: string;
+  role: "assistant";
+  content: string;
+  reasoning: string;
+  model: string | null;
+  modelLabel: string | null;
+  createdAt: Date;
 }
 
 export default function ChatSessionPage() {
   const { models, session, messages: initialMessages } = useLoaderData<typeof loader>();
   const location = useLocation();
   const navigate = useNavigate();
-  const [messages, setMessages] = useState(initialMessages);
-  const [streamingContent, setStreamingContent] = useState("");
+  const [messages, setMessages] = useState<LoaderData["messages"]>(initialMessages);
+  const [pendingAssistant, setPendingAssistant] = useState<PendingAssistantMessage | null>(null);
+
+  // Ref for synchronous access to latest pending state (avoids React batching issues)
+  const pendingAssistantRef = useRef<PendingAssistantMessage | null>(null);
+
+  // Sync ref whenever state changes (for UI reads)
+  useEffect(() => {
+    pendingAssistantRef.current = pendingAssistant;
+  }, [pendingAssistant]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState(session.model);
   const [activeAssistantLabel, setActiveAssistantLabel] = useState(session.modelLabel);
+
+  // 保存模型选择到 localStorage
+  useEffect(() => {
+    if (selectedModel) {
+      localStorage.setItem("lastSelectedModel", selectedModel);
+    }
+  }, [selectedModel]);
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const hasAutoSubmittedRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const activeModel = models.find((model) => model.id === selectedModel) ?? models[0];
+  const lastAssistantMessageId = [...messages].reverse().find((message) => message.role === "assistant")?.id ?? null;
 
   useEffect(() => {
     setMessages(initialMessages);
@@ -286,7 +410,7 @@ export default function ChatSessionPage() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingContent]);
+  }, [messages, pendingAssistant?.content]);
 
   useEffect(() => {
     if (!isModelMenuOpen) {
@@ -311,7 +435,14 @@ export default function ChatSessionPage() {
 
       setError(null);
       setIsStreaming(true);
-      setStreamingContent("");
+      setPendingAssistant(null);
+
+      // Abort any existing request
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
 
       if (formRef.current) {
         formRef.current.reset();
@@ -320,115 +451,171 @@ export default function ChatSessionPage() {
         textareaRef.current.style.height = "auto";
       }
 
+      const selectedOption = models.find((item) => item.id === model) ?? activeModel;
+      setActiveAssistantLabel(selectedOption?.label ?? session.modelLabel);
+
+      const optimisticUserMessage: LoaderData["messages"][number] = {
+        id: `temp-${Date.now()}`,
+        role: "user" as const,
+        model: null,
+        modelLabel: null,
+        content: content.trim(),
+        createdAt: new Date(),
+      };
+      setMessages((prev) => [...prev, optimisticUserMessage]);
+
+      // Initialize pending assistant message (ref first to avoid race conditions)
+      const pendingId = `pending-${Date.now()}`;
+      const initialPending: PendingAssistantMessage = {
+        id: pendingId,
+        role: "assistant",
+        content: "",
+        reasoning: "",
+        model,
+        modelLabel: selectedOption?.label ?? session.modelLabel,
+        createdAt: new Date(),
+      };
+      pendingAssistantRef.current = initialPending;
+      setPendingAssistant(initialPending);
+
+      let streamCompleted = false;
+      let streamStarted = false;
+
+      const rollbackOptimisticUserMessage = () => {
+        setMessages((prev) => prev.filter((message) => message.id !== optimisticUserMessage.id));
+      };
+
       try {
-        const selectedOption = models.find((item) => item.id === model) ?? activeModel;
-        setActiveAssistantLabel(selectedOption?.label ?? session.modelLabel);
-
-        const optimisticUserMessage: LoaderData["messages"][number] = {
-          id: `temp-${Date.now()}`,
-          role: "user" as const,
-          model: null,
-          modelLabel: null,
-          content: content.trim(),
-          createdAt: new Date(),
-        };
-        setMessages((prev) => [...prev, optimisticUserMessage]);
-
-        const response = await fetch(`/chat/${session.id}/stream`, {
+        await fetchEventSource(`/chat/${session.id}/stream`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ content, model }),
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(errorText || "Failed to send message");
-        }
-
-        if (!response.body) {
-          throw new Error("No response body");
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let assistantContent = "";
-        let streamCompleted = false;
-        let streamError: string | null = null;
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          let currentEvent: { type: string; data: string } | null = null;
-
-          for (const line of lines) {
-            if (line.startsWith("event: ")) {
-              currentEvent = { type: line.slice(7), data: "" };
-            } else if (line.startsWith("data: ") && currentEvent) {
-              currentEvent.data = line.slice(6);
-
-              try {
-                const eventData = JSON.parse(currentEvent.data) as SSEEvent;
-
-                switch (eventData.type) {
-                  case "start":
-                    setActiveAssistantLabel(selectedOption?.label ?? eventData.model);
-                    break;
-                  case "token":
-                    assistantContent += eventData.content;
-                    setStreamingContent(assistantContent);
-                    break;
-                  case "complete":
-                    setMessages((prev) => [
-                      ...prev,
-                      {
-                        id: eventData.messageId,
-                        role: "assistant",
-                        model,
-                        modelLabel: selectedOption?.label ?? session.modelLabel,
-                        content: eventData.content,
-                        createdAt: new Date(),
-                      },
-                    ]);
-                    setStreamingContent("");
-                    setIsStreaming(false);
-                    streamCompleted = true;
-                    break;
-                  case "error":
-                    streamError = eventData.message;
-                    setError(eventData.message);
-                    setIsStreaming(false);
-                    break;
-                }
-              } catch (parseError) {
-                console.error("Failed to parse SSE event:", parseError);
-              }
-
-              currentEvent = null;
-            } else if (line === "" && currentEvent) {
-              currentEvent = null;
+          signal: abortController.signal,
+          async onopen(response) {
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
-          }
-        }
+          },
+          onmessage(event) {
+            if (!event.data) return;
 
-        if (streamCompleted && !streamError) {
-          window.location.reload();
-        }
+            try {
+              const eventData = JSON.parse(event.data) as SSEEvent;
+
+              switch (eventData.type) {
+                case "start":
+                  streamStarted = true;
+                  setActiveAssistantLabel(selectedOption?.label ?? eventData.model);
+                  break;
+
+                case "token":
+                  // Update ref immediately as source of truth, then trigger state update
+                  if (pendingAssistantRef.current) {
+                    pendingAssistantRef.current = {
+                      ...pendingAssistantRef.current,
+                      content: pendingAssistantRef.current.content + eventData.content,
+                    };
+                    setPendingAssistant(pendingAssistantRef.current);
+                  }
+                  break;
+
+                case "reasoning":
+                  // Update ref immediately as source of truth, then trigger state update
+                  if (pendingAssistantRef.current) {
+                    pendingAssistantRef.current = {
+                      ...pendingAssistantRef.current,
+                      reasoning: pendingAssistantRef.current.reasoning + eventData.content,
+                    };
+                    setPendingAssistant(pendingAssistantRef.current);
+                  }
+                  break;
+
+                case "complete":
+                  // Read from ref which is always up-to-date (updated synchronously in token/reasoning handlers)
+                  const latestPending = pendingAssistantRef.current;
+                  setMessages((prev) => [
+                    ...prev,
+                    {
+                      id: eventData.messageId,
+                      role: "assistant",
+                      model,
+                      modelLabel: selectedOption?.label ?? session.modelLabel,
+                      content: eventData.content,
+                      reasoning: latestPending?.reasoning || null,
+                      followUpQuestions: null,
+                      createdAt: new Date(),
+                    },
+                  ]);
+                  pendingAssistantRef.current = null;
+                  setPendingAssistant(null);
+                  setIsStreaming(false);
+                  streamCompleted = true;
+                  break;
+
+                case "suggestions":
+                  // Merge suggestions into the corresponding assistant message
+                  setMessages((prev) =>
+                    prev.map((msg) =>
+                      msg.id === eventData.messageId
+                        ? { ...msg, followUpQuestions: eventData.questions }
+                        : msg
+                    )
+                  );
+                  break;
+
+                case "error":
+                  if (!streamStarted) {
+                    rollbackOptimisticUserMessage();
+                  }
+                  setError(eventData.message);
+                  setIsStreaming(false);
+                  setPendingAssistant(null);
+                  break;
+              }
+            } catch (parseError) {
+              console.error("Failed to parse SSE event:", parseError);
+            }
+          },
+          onclose() {
+            if (!streamCompleted) {
+              if (!streamStarted) {
+                rollbackOptimisticUserMessage();
+              }
+              setIsStreaming(false);
+              setPendingAssistant(null);
+            }
+          },
+          onerror(err) {
+            console.error("SSE error:", err);
+            if (!streamStarted) {
+              rollbackOptimisticUserMessage();
+            }
+            setError(err instanceof Error ? err.message : "Stream connection failed");
+            setIsStreaming(false);
+            setPendingAssistant(null);
+            throw err;
+          },
+        });
       } catch (err) {
+        // Don't show error for aborted requests
+        if (err instanceof Error && err.name === "AbortError") {
+          if (!streamStarted) {
+            rollbackOptimisticUserMessage();
+          }
+          return;
+        }
         const message = err instanceof Error ? err.message : "Failed to send message";
+        if (!streamStarted) {
+          rollbackOptimisticUserMessage();
+        }
         setError(message);
         setIsStreaming(false);
+        setPendingAssistant(null);
       }
     },
-    [activeModel, models, selectedModel, session.id, session.modelLabel],
+    [activeModel, models, selectedModel, session.id, session.modelLabel]
   );
 
   const handleSubmit = useCallback(
@@ -490,15 +677,23 @@ export default function ChatSessionPage() {
                   key={message.id}
                   role={message.role}
                   content={message.content}
+                  reasoning={message.reasoning}
+                  followUpQuestions={
+                    !isStreaming && message.role === "assistant" && message.id === lastAssistantMessageId
+                      ? message.followUpQuestions
+                      : null
+                  }
                   createdAt={message.createdAt}
                   assistantLabel={message.modelLabel ?? activeAssistantLabel}
+                  onQuestionClick={submitPrompt}
                 />
               ))}
 
-              {isStreaming && (
+              {isStreaming && pendingAssistant && (
                 <MessageCard
                   role="assistant"
-                  content={streamingContent || "..."}
+                  content={pendingAssistant.content || "..."}
+                  reasoning={pendingAssistant.reasoning || null}
                   pending
                   assistantLabel={activeAssistantLabel}
                 />
@@ -535,9 +730,10 @@ export default function ChatSessionPage() {
                   required
                   rows={1}
                   disabled={isStreaming}
-                  className="chat-textarea max-h-[220px] min-h-[52px] w-full resize-none bg-transparent px-2 py-2 text-[15px] text-[var(--chat-ink)] outline-none placeholder:text-[var(--chat-muted)]/70"
+                  spellCheck={false}
+                  className="chat-textarea max-h-[220px] min-h-[62px] w-full resize-none bg-transparent px-2 py-2 text-[15px] text-[var(--chat-ink)] outline-none placeholder:text-[var(--chat-muted)]/70"
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
+                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                       e.preventDefault();
                       formRef.current?.requestSubmit();
                     }

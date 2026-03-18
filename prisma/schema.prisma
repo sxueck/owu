@@ -62,12 +62,16 @@ model ChatSession {
 
 // Individual chat messages
 model ChatMessage {
-  id        String       @id @default(cuid())
-  sessionId String       @map("session_id")
-  role      MessageRole
-  model     String?
-  content   String       @db.LongText
-  createdAt DateTime     @default(now()) @map("created_at")
+  id                String       @id @default(cuid())
+  sessionId         String       @map("session_id")
+  role              MessageRole
+  model             String?
+  content           String       @db.LongText
+  // Reasoning/thinking content from models that support it
+  reasoning         String?      @db.LongText @map("reasoning")
+  // Follow-up question suggestions stored as JSON array
+  followUpQuestions Json?        @map("follow_up_questions")
+  createdAt         DateTime     @default(now()) @map("created_at")
 
   // Relations
   session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)

@@ -4,6 +4,7 @@
   --font-sans: "MiSans", "Segoe UI", ui-sans-serif, system-ui, sans-serif,
     "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
   --font-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --font-mono: "Consolas", "Monaco", "Menlo", "Fira Code", "SF Mono", monospace;
 
   /* Custom colors for OWU */
   --color-primary-50: #eff6ff;
@@ -17,6 +18,7 @@
   --chat-ink: #1a1a1a;
   --chat-muted: #6b7280;
   --chat-line: rgba(0, 0, 0, 0.08);
+  --chat-line-strong: rgba(37, 99, 235, 0.18);
   --chat-panel: #ffffff;
   --chat-panel-strong: #fafafa;
   --chat-page-top: #ffffff;

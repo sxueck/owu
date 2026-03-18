@@ -246,12 +246,12 @@ export default function ChatLayout() {
       <aside
         data-sidebar
         className={[
-          "chat-panel safe-top safe-bottom absolute inset-y-0 left-0 z-50 flex w-[260px] flex-col overflow-hidden bg-white",
+          "safe-top safe-bottom absolute inset-y-0 left-0 z-50 flex w-[260px] flex-col overflow-hidden bg-gray-50",
           "transition-all duration-200 ease-out lg:static lg:inset-auto lg:h-screen lg:translate-x-0",
           isMobile ? (isMobileMenuOpen ? "translate-x-0" : "-translate-x-full") : "translate-x-0",
         ].join(" ")}
       >
-        <div className="border-b border-[var(--chat-line)] px-4 pb-4 pt-5">
+        <div className="border-b border-gray-200 px-4 pb-4 pt-5">
           <div className="relative flex items-center justify-between">
             <Link to="/chat" className="min-w-0" onClick={() => setIsMobileMenuOpen(false)}>
               <div className="pl-2 text-lg font-semibold text-[var(--chat-ink)]">
@@ -285,8 +285,16 @@ export default function ChatLayout() {
 
         <div className="flex-1 overflow-y-auto px-3 py-2">
           {sessions.length === 0 ? (
-            <div className="mx-1 rounded-lg border border-dashed border-[var(--chat-line)] px-4 py-6 text-center">
-              <p className="text-sm text-[var(--chat-muted)]">No chats yet</p>
+            <div className="mx-1 rounded-2xl border border-dashed border-gray-300 bg-gray-100/50 px-4 py-6 text-center">
+              <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-full bg-white text-[var(--chat-muted)] shadow-sm">
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.85 9.85 0 0 1-4.25-.95L3 20l1.4-3.72A8.94 8.94 0 0 1 3 12c0-4.42 4.03-8 9-8s9 3.58 9 8Z" />
+                </svg>
+              </div>
+              <p className="mt-3 text-sm font-medium text-[var(--chat-ink)]">No chats yet</p>
+              <p className="mt-1 text-xs leading-5 text-[var(--chat-muted)]">
+                Start a thread and your recent sessions will show up here.
+              </p>
             </div>
           ) : (
             <div className="space-y-4">
@@ -310,11 +318,11 @@ export default function ChatLayout() {
                             }}
                             className={({ isActive }) =>
                               [
-                                "group relative block rounded-md px-3 py-2 pr-8 text-sm",
-                                "transition-colors",
+                                "group relative block rounded-lg px-3 py-2 pr-8 text-sm",
+                                "transition-all duration-200",
                                 isActive
-                                  ? "bg-gray-100 text-[var(--chat-ink)]"
-                                  : "text-[var(--chat-muted)] hover:bg-gray-50 hover:text-[var(--chat-ink)]",
+                                  ? "bg-white shadow-sm text-[var(--chat-ink)] border border-gray-200"
+                                  : "text-[var(--chat-muted)] hover:bg-gray-100/50 hover:text-[var(--chat-ink)]",
                               ].join(" ")
                             }
                           >
@@ -385,9 +393,9 @@ export default function ChatLayout() {
           )}
         </div>
 
-        <div className="border-t border-[var(--chat-line)] px-3 py-3">
-          <div className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-gray-50">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-200 text-sm font-semibold text-gray-700">
+        <div className="border-t border-gray-200 px-3 py-3">
+          <div className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-gray-100/50 transition-colors">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white border border-gray-200 text-sm font-semibold text-[var(--chat-ink)] shadow-sm">
               {user.username.charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
@@ -399,7 +407,7 @@ export default function ChatLayout() {
             <Form method="post" action="/logout">
               <button
                 type="submit"
-                className="rounded p-1.5 text-[var(--chat-muted)] transition-colors hover:bg-gray-200 hover:text-[var(--chat-ink)]"
+                className="rounded-lg p-1.5 text-[var(--chat-muted)] transition-colors hover:bg-gray-200 hover:text-[var(--chat-ink)]"
                 title="Log out"
               >
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

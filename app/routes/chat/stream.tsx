@@ -1,10 +1,19 @@
 import type { Route } from "./+types/stream";
 import { getSession } from "~/sessions";
 
+/**
+ * SSE event types for streaming chat
+ *
+ * Event sequence contract:
+ * start -> zero or more (reasoning | token) -> complete -> zero or one suggestions
+ * error can terminate at any point on failure paths
+ */
 type SSEEvent =
   | { type: "start"; sessionId: string; model: string }
   | { type: "token"; content: string }
+  | { type: "reasoning"; content: string }
   | { type: "complete"; messageId: string; content: string }
+  | { type: "suggestions"; messageId: string; questions: string[] }
   | { type: "error"; message: string };
 
 /**

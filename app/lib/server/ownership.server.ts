@@ -95,6 +95,7 @@ export async function getUserChatSessions(
 
 /**
  * Get chat messages for a session with ownership check.
+ * Returns messages with reasoning and follow-up questions for assistant messages.
  */
 export async function getChatMessages(
   sessionId: string,
@@ -105,6 +106,8 @@ export async function getChatMessages(
   model: string | null;
   modelLabel: string | null;
   content: string;
+  reasoning?: string | null;
+  followUpQuestions?: string[] | null;
   createdAt: Date;
 }>> {
   // First verify ownership
@@ -118,6 +121,8 @@ export async function getChatMessages(
       role: true,
       model: true,
       content: true,
+      reasoning: true,
+      followUpQuestions: true,
       createdAt: true,
     },
   });
@@ -132,9 +137,20 @@ export async function getChatMessages(
       ? resolveModelReferenceFromProviders(message.model, config.providers)
       : null;
 
+    // Parse followUpQuestions from JSON if present
+    const followUpQuestions = message.followUpQuestions && Array.isArray(message.followUpQuestions)
+      ? message.followUpQuestions as string[]
+      : null;
+
     return {
-      ...message,
+      id: message.id,
+      role: message.role as 'user' | 'assistant' | 'system',
+      model: message.model,
       modelLabel: resolvedModel?.label ?? (message.role === 'assistant' ? fallbackModel?.label ?? session.model : null),
+      content: message.content,
+      reasoning: message.reasoning,
+      followUpQuestions,
+      createdAt: message.createdAt,
     };
   });
 }
