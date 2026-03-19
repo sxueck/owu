@@ -13,15 +13,16 @@ export function meta({}: Route.MetaArgs) {
 export async function loader({ request }: Route.LoaderArgs) {
   const session = await getSession(request.headers.get("Cookie"));
   const { requireUser } = await import("~/lib/server/session.server");
-  const { getAvailableModels, getUserChatPreferences } = await import("~/lib/server/chat.server");
+  const { getAvailableModels } = await import("~/lib/server/chat.server");
+  const { getUserSettings } = await import("~/lib/server/user-settings.server");
 
   const user = requireUser(session);
-  const [models, preferences] = await Promise.all([
+  const [models, settings] = await Promise.all([
     getAvailableModels(),
-    getUserChatPreferences(user.userId),
+    getUserSettings(user.userId),
   ]);
 
-  return { models, preferences };
+  return { models, settings };
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -70,8 +71,6 @@ export async function action({ request }: Route.ActionArgs) {
   }
 }
 
-const LAST_SELECTED_MODEL_KEY = "lastSelectedModel";
-
 function createSubmissionKey(prompt: string, model: string): string | null {
   const content = prompt.trim();
   if (!content) {
@@ -82,25 +81,20 @@ function createSubmissionKey(prompt: string, model: string): string | null {
 }
 
 export default function ChatIndexPage() {
-  const { models, preferences } = useLoaderData<typeof loader>();
+  const { models, settings } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state === "submitting";
 
-  // 从 localStorage 读取上次选择的模型，如果没有则使用第一个可用模型
+  // 优先使用服务端用户设置中的默认模型，支持失效回退
   const getInitialModel = () => {
-    if (typeof window === "undefined") return models[0]?.id ?? "";
-    const lastModel = localStorage.getItem(LAST_SELECTED_MODEL_KEY);
-    if (lastModel && models.some((m) => m.id === lastModel)) {
-      return lastModel;
-    }
-    return models[0]?.id ?? "";
+    return settings.defaultModel?.selectedModelId ?? models[0]?.id ?? "";
   };
 
   const [selectedModel, setSelectedModel] = useState(getInitialModel);
   const [prompt, setPrompt] = useState("");
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
-  const [networkEnabled, setNetworkEnabled] = useState(preferences.chatNetworkEnabled);
+  const [networkEnabled, setNetworkEnabled] = useState(settings.chatNetworkEnabled);
   const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modelMenuRef = useRef<HTMLDivElement>(null);
@@ -129,6 +123,11 @@ export default function ChatIndexPage() {
       submitLockRef.current = null;
     }
   }, [navigation.state]);
+
+  // Auto-focus textarea on page load
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, []);
 
   useEffect(() => {
     if (!isModelMenuOpen) {
