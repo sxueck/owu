@@ -125,13 +125,7 @@ export default function NotionSpacePage() {
 
         {bookmarks.length === 0 ? (
           <section className="rounded-[28px] border border-dashed border-[var(--chat-line)] bg-[var(--chat-panel)] px-6 py-14 text-center sm:px-10">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--chat-accent-soft)] text-[var(--chat-accent)]">
-              <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5v-13Z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8 7h8M8 11h8M8 15h5" />
-              </svg>
-            </div>
-            <h2 className="mt-5 text-xl font-semibold text-[var(--chat-ink)]">还没有收藏的代码块</h2>
+            <h2 className="text-xl font-semibold text-[var(--chat-ink)]">还没有收藏的代码块</h2>
             <p className="mx-auto mt-3 max-w-lg text-sm leading-7 text-[var(--chat-muted)]">
               回到对话页，在代码块右上角点击书签图标，就会把内容保存到这里。
             </p>

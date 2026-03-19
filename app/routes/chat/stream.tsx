@@ -10,7 +10,7 @@ import { getSession } from "~/sessions";
  * error can terminate at any point on failure paths
  */
 type SSEEvent =
-  | { type: "start"; sessionId: string; model: string }
+  | { type: "start"; sessionId: string; model: string; userMessageId?: string }
   | { type: "tool-status"; message: string }
   | { type: "token"; content: string }
   | { type: "reasoning"; content: string }

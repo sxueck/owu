@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 import { TokenUsageRing } from "~/components/chat/token-usage-ring";
 import { CodeBlockCard, formatCodeLanguageLabel } from "~/components/chat/code-block-card";
+import { reconcileOptimisticMessageId } from "./session-message-state";
 
 interface ChatModelOption {
   id: string;
@@ -25,7 +26,7 @@ interface ChatModelOption {
  * error can terminate at any point on failure paths
  */
 type SSEEvent =
-  | { type: "start"; sessionId: string; model: string }
+  | { type: "start"; sessionId: string; model: string; userMessageId?: string }
   | { type: "tool-status"; message: string }
   | { type: "token"; content: string }
   | { type: "reasoning"; content: string }
@@ -257,12 +258,12 @@ function MessageContent({
         remarkPlugins={[remarkGfm]}
         components={{
           p: ({ children }) => <p className="mb-3 leading-7 last:mb-0">{children}</p>,
-          h1: ({ children }) => <h1 className="mb-4 mt-6 text-2xl font-semibold text-[var(--chat-ink)]">{children}</h1>,
-          h2: ({ children }) => <h2 className="mb-3 mt-5 text-xl font-semibold text-[var(--chat-ink)]">{children}</h2>,
-          h3: ({ children }) => <h3 className="mb-3 mt-4 text-lg font-semibold text-[var(--chat-ink)]">{children}</h3>,
-          h4: ({ children }) => <h4 className="mb-2 mt-4 text-base font-semibold text-[var(--chat-ink)]">{children}</h4>,
-          h5: ({ children }) => <h5 className="mb-2 mt-3 text-sm font-semibold text-[var(--chat-ink)]">{children}</h5>,
-          h6: ({ children }) => <h6 className="mb-2 mt-3 text-xs font-semibold uppercase tracking-wider text-[var(--chat-muted)]">{children}</h6>,
+          h1: ({ children }) => <h1 className="mb-4 mt-6 text-2xl font-medium text-[var(--chat-ink)]">{children}</h1>,
+          h2: ({ children }) => <h2 className="mb-3 mt-5 text-xl font-medium text-[var(--chat-ink)]">{children}</h2>,
+          h3: ({ children }) => <h3 className="mb-3 mt-4 text-lg font-medium text-[var(--chat-ink)]">{children}</h3>,
+          h4: ({ children }) => <h4 className="mb-2 mt-4 text-base font-medium text-[var(--chat-ink)]">{children}</h4>,
+          h5: ({ children }) => <h5 className="mb-2 mt-3 text-sm font-medium text-[var(--chat-ink)]">{children}</h5>,
+          h6: ({ children }) => <h6 className="mb-2 mt-3 text-xs font-medium uppercase tracking-wider text-[var(--chat-muted)]">{children}</h6>,
           ul: ({ children }) => <ul className="mb-3 ml-5 list-disc space-y-1 leading-7">{children}</ul>,
           ol: ({ children }) => <ol className="mb-3 ml-5 list-decimal space-y-1 leading-7">{children}</ol>,
           li: ({ children }) => <li className="leading-7">{children}</li>,
@@ -365,9 +366,9 @@ function MessageContent({
           thead: ({ children }) => <thead className="bg-[rgba(20,33,28,0.06)]">{children}</thead>,
           tbody: ({ children }) => <tbody>{children}</tbody>,
           tr: ({ children }) => <tr className="border-b border-[var(--chat-line)] last:border-b-0">{children}</tr>,
-          th: ({ children }) => <th className="px-3 py-2 text-left font-semibold text-[var(--chat-ink)]">{children}</th>,
+          th: ({ children }) => <th className="px-3 py-2 text-left font-medium text-[var(--chat-ink)]">{children}</th>,
           td: ({ children }) => <td className="px-3 py-2 text-[var(--chat-ink)]">{children}</td>,
-          strong: ({ children }) => <strong className="font-bold text-[var(--chat-ink)]">{children}</strong>,
+          strong: ({ children }) => <strong className="font-medium tracking-[0.01em] text-[var(--chat-ink)]">{children}</strong>,
           em: ({ children }) => <em className="italic">{children}</em>,
           del: ({ children }) => <del className="line-through text-[var(--chat-muted)]">{children}</del>,
         }}
@@ -1001,6 +1002,11 @@ export default function ChatSessionPage() {
                 case "start":
                   streamStarted = true;
                   setActiveAssistantLabel(selectedOption?.label ?? eventData.model);
+                  if (optimisticUserMessageId && eventData.userMessageId) {
+                    setMessages((prev) =>
+                      reconcileOptimisticMessageId(prev, optimisticUserMessageId, eventData.userMessageId)
+                    );
+                  }
                   break;
 
                 case "token":

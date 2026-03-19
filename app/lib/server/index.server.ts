@@ -57,6 +57,41 @@ export type {
   UserPreferencesInput,
 } from './preferences.server';
 
+// User Memory
+export {
+  getUserMemories,
+  createUserMemory,
+  updateUserMemory,
+  deleteUserMemory,
+  getMemoryById,
+  getMemoriesByIds,
+} from './user-memory.server';
+export type {
+  UserMemory,
+  MemorySource,
+  CreateMemoryInput,
+  UpdateMemoryInput,
+} from './user-memory.server';
+
+// User Settings (unified interface)
+export {
+  getUserSettings,
+  saveUserSettings,
+  getEffectiveSystemPrompt,
+  getUserMemoriesForContext,
+  DEFAULT_SYSTEM_PROMPT,
+  createUserMemory as createUserMemoryFromSettings,
+  updateUserMemory as updateUserMemoryFromSettings,
+  deleteUserMemory as deleteUserMemoryFromSettings,
+} from './user-settings.server';
+export type {
+  UserSettingsReadModel,
+  UserSettingsModelInfo,
+  UserSettingsDefaultModel,
+  UserSettingsPersonalPrompt,
+  SaveUserSettingsInput,
+} from './user-settings.server';
+
 // Session Management
 export {
   createUserSession,

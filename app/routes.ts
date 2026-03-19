@@ -28,4 +28,10 @@ export default [
   route("api/preferences/network", "routes/api/preferences.network.ts"),
   route("api/bookmarks", "routes/api/bookmarks.ts"),
   route("api/bookmarks/:bookmarkId", "routes/api/bookmarks.$bookmarkId.ts"),
+  
+  // User settings routes
+  route("api/user/settings", "routes/api/user.settings.ts"),
+  route("api/user/memories", "routes/api/user.memories.ts"),
+  route("api/user/memories/:memoryId", "routes/api/user.memories.$memoryId.ts"),
+  route("api/user/memories/summary", "routes/api/user.memories.summary.ts"),
 ] satisfies RouteConfig;

@@ -25,6 +25,12 @@ import type { SessionData } from './session.server';
 import { isExaConfigured, executeExaSearch, formatExaResultsForToolResponse } from './exa.server';
 import { getUserChatPreferences } from './preferences.server';
 export { getUserChatPreferences };
+import {
+  getEffectiveSystemPrompt,
+  getUserMemoriesForContext,
+  DEFAULT_SYSTEM_PROMPT,
+  type UserMemory,
+} from './user-settings.server';
 
 /**
  * Exa search tool definition for OpenAI tool calling
@@ -99,6 +105,7 @@ type StoredChatMessage = {
 type PendingTurnMutation =
   | {
       intent: 'send';
+      userMessageId: string;
     }
   | {
       intent: 'edit-last-user';
@@ -207,7 +214,7 @@ async function prepareStreamHistory(
       throw new Error('Message content is required.');
     }
 
-    await prisma.chatMessage.create({
+    const userMessage = await prisma.chatMessage.create({
       data: {
         sessionId,
         role: 'user',
@@ -218,7 +225,10 @@ async function prepareStreamHistory(
     const history = await getSessionHistory(sessionId);
     return {
       messages: toCompletionMessages(history),
-      pendingMutation: { intent: 'send' },
+      pendingMutation: {
+        intent: 'send',
+        userMessageId: userMessage.id,
+      },
     };
   }
 
@@ -515,7 +525,7 @@ export async function getChatSessionMeta(
  * error can terminate at any point on failure paths
  */
 export type SSEEvent =
-  | { type: 'start'; sessionId: string; model: string }
+  | { type: 'start'; sessionId: string; model: string; userMessageId?: string }
   | { type: 'tool-status'; message: string }
   | { type: 'token'; content: string }
   | { type: 'reasoning'; content: string }
@@ -684,6 +694,53 @@ function prependPostToolSynthesisPrompt(messages: ChatCompletionMessage[]): Chat
   ];
 }
 
+/**
+ * Build the user context system prompt from personal prompt and memories.
+ * This combines the effective system prompt with any user memories.
+ */
+function buildUserContextPrompt(personalPrompt: string, memories: UserMemory[]): string {
+  const sections: string[] = [personalPrompt];
+
+  if (memories.length > 0) {
+    const memorySection = [
+      '',
+      'The following is information about the user that you should keep in mind:',
+      '',
+      ...memories.map((memory, index) => `${index + 1}. ${memory.content}`),
+    ].join('\n');
+    sections.push(memorySection);
+  }
+
+  return sections.join('\n');
+}
+
+/**
+ * Prepend user context (personal prompt + memories) to messages.
+ * This should be called BEFORE other system prompts like network search.
+ *
+ * Injection rules:
+ * - Default preset prompt is always injected
+ * - If user has custom prompt: custom prompt takes priority over default
+ * - If user has memories: memories are appended after the prompt
+ */
+function prependUserContextPrompt(
+  messages: ChatCompletionMessage[],
+  personalPrompt: string,
+  memories: UserMemory[],
+  isCustomPrompt: boolean
+): ChatCompletionMessage[] {
+  // Always inject user context - default preset prompt is always included per spec
+  const userContextContent = buildUserContextPrompt(personalPrompt, memories);
+
+  return [
+    {
+      role: 'system',
+      content: userContextContent,
+    },
+    ...messages,
+  ];
+}
+
 function buildPromptBasedToolContextMessage(
   toolCalls: AssistantToolCall[],
   toolResults: ToolResultMessage[]
@@ -809,20 +866,33 @@ export async function sendMessageStream(
     });
   }
 
-  // Notify stream start
-  await onEvent({ type: 'start', sessionId: input.sessionId, model: resolvedModel.model });
-
   try {
     // Step 4: Mutate the last turn when needed, then rebuild history for the next completion.
     const { messages, pendingMutation } = await prepareStreamHistory(input.sessionId, input);
 
-    // Step 5: Execute the appropriate flow based on tool calling mode
+    await onEvent({
+      type: 'start',
+      sessionId: input.sessionId,
+      model: resolvedModel.model,
+      userMessageId: pendingMutation.intent === 'send' ? pendingMutation.userMessageId : undefined,
+    });
+
+    // Step 5: Fetch user context (personal prompt and memories) and inject into messages
+    const [preferences, memories] = await Promise.all([
+      getUserChatPreferences(user.userId),
+      getUserMemoriesForContext(user.userId),
+    ]);
+    const personalPrompt = preferences.personalPrompt?.trim() || DEFAULT_SYSTEM_PROMPT;
+    const isCustomPrompt = Boolean(preferences.personalPrompt?.trim());
+    const messagesWithUserContext = prependUserContextPrompt(messages, personalPrompt, memories, isCustomPrompt);
+
+    // Step 6: Execute the appropriate flow based on tool calling mode
     if (useToolCalling) {
       // Tool-enabled flow with exa_search
       await executeToolCallingFlow(
         input.sessionId,
         resolvedModel,
-        messages,
+        messagesWithUserContext,
         pendingMutation,
         searchConfig!,
         onEvent,
@@ -833,7 +903,7 @@ export async function sendMessageStream(
       await executeNormalFlow(
         input.sessionId,
         resolvedModel,
-        messages,
+        messagesWithUserContext,
         pendingMutation,
         onEvent,
         undefined,

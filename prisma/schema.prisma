@@ -22,6 +22,7 @@ model User {
   sessions    ChatSession[]
   preferences UserPreference?
   bookmarks   CodeBookmark[]
+  memories    UserMemory[]
 
   @@map("users")
 }
@@ -117,6 +118,8 @@ model UserPreference {
   id                 String   @id @default(cuid())
   userId             String   @unique @map("user_id")
   chatNetworkEnabled Boolean  @default(true) @map("chat_network_enabled")
+  defaultModelId     String?  @map("default_model_id")
+  personalPrompt     String?  @map("personal_prompt") @db.Text
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
 
@@ -124,4 +127,26 @@ model UserPreference {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_preferences")
+}
+
+enum MemorySource {
+  manual
+  ai_summary
+}
+
+// User memory items for long-term context
+model UserMemory {
+  id        String       @id @default(cuid())
+  userId    String       @map("user_id")
+  content   String       @db.Text
+  source    MemorySource @default(manual) @map("source")
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, createdAt])
+  @@map("user_memories")
 }
