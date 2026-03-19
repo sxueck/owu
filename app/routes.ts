@@ -10,6 +10,7 @@ export default [
   // Protected user routes
   route("chat", "routes/chat/layout.tsx", [
     index("routes/chat/index.tsx"),
+    route("notion-space", "routes/chat/notion-space.tsx"),
     route(":sessionId", "routes/chat/session.tsx"),
     route(":sessionId/stream", "routes/chat/stream.tsx"),
   ]),

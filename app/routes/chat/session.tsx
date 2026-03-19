@@ -6,79 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 import { TokenUsageRing } from "~/components/chat/token-usage-ring";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
-
-async function copyToClipboard(text: string): Promise<void> {
-  if (typeof window === "undefined") {
-    throw new Error("Clipboard is not available outside browser context");
-  }
-
-  if (window.isSecureContext && window.navigator.clipboard?.writeText) {
-    await window.navigator.clipboard.writeText(text);
-    return;
-  }
-
-  const textArea = document.createElement("textarea");
-  textArea.value = text;
-  textArea.setAttribute("readonly", "true");
-  textArea.style.position = "fixed";
-  textArea.style.top = "0";
-  textArea.style.left = "-9999px";
-  textArea.style.opacity = "0";
-
-  document.body.appendChild(textArea);
-  try {
-    textArea.focus();
-    textArea.select();
-    textArea.setSelectionRange(0, textArea.value.length);
-
-    const copied = document.execCommand("copy");
-    if (!copied) {
-      throw new Error("Copy command failed");
-    }
-  } finally {
-    document.body.removeChild(textArea);
-  }
-}
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async () => {
-    try {
-      await copyToClipboard(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error("Failed to copy:", err);
-    }
-  };
-
-  return (
-    <button
-      onClick={handleCopy}
-      className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-white/70 transition-all duration-200 hover:bg-white/10 hover:text-white"
-      title={copied ? "Copied!" : "Copy code"}
-    >
-      {copied ? (
-        <>
-          <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-          </svg>
-          <span>Copied</span>
-        </>
-      ) : (
-        <>
-          <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-          </svg>
-          <span>Copy</span>
-        </>
-      )}
-    </button>
-  );
-}
+import { CodeBlockCard, formatCodeLanguageLabel } from "~/components/chat/code-block-card";
 
 interface ChatModelOption {
   id: string;
@@ -125,22 +53,6 @@ interface CodeBookmarkPayload {
   codeContent: string;
   lineNumber?: number;
   defaultTitle: string;
-}
-
-function BookmarkButton({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-white/70 transition-all duration-200 hover:bg-white/10 hover:text-white"
-      title="保存代码书签"
-    >
-      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 3H7a2 2 0 0 0-2 2v16l7-4 7 4V5a2 2 0 0 0-2-2Z" />
-      </svg>
-      <span>存档</span>
-    </button>
-  );
 }
 
 function readSessionTokenUsage(sessionId: string): number {
@@ -293,6 +205,11 @@ function getCodeLineCount(codeContent: string): number {
   return normalized.split("\n").length;
 }
 
+function autoResizeTextarea(textarea: HTMLTextAreaElement, maxHeight: number): void {
+  textarea.style.height = "auto";
+  textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+}
+
 function getMessageKeyFromLongCodeBlockId(blockId: string): string {
   const separatorIndex = blockId.lastIndexOf(":long-code:");
   if (separatorIndex === -1) {
@@ -300,73 +217,6 @@ function getMessageKeyFromLongCodeBlockId(blockId: string): string {
   }
 
   return blockId.slice(0, separatorIndex);
-}
-
-function CodeBlockCard({
-  language,
-  codeContent,
-  messageId,
-  onBookmarkRequest,
-  className,
-}: {
-  language: string;
-  codeContent: string;
-  messageId?: string;
-  onBookmarkRequest?: (payload: CodeBookmarkPayload) => void;
-  className?: string;
-}) {
-  return (
-    <div className={[
-      "overflow-hidden rounded-2xl border border-[rgba(20,33,28,0.15)] bg-[#1a2822] shadow-lg transition-all duration-200 hover:shadow-xl",
-      className || "",
-    ].join(" ")}>
-      <div className="flex items-center justify-between border-b border-white/10 bg-[#14211c] px-4 py-2.5">
-        <div className="flex items-center gap-2">
-          {language ? (
-            <span className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--chat-accent)]">
-              {language}
-            </span>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-1">
-          {messageId && onBookmarkRequest ? (
-            <BookmarkButton
-              onClick={() =>
-                onBookmarkRequest({
-                  messageId,
-                  language: language || "text",
-                  codeContent,
-                  defaultTitle: getDefaultBookmarkTitle(codeContent),
-                })
-              }
-            />
-          ) : null}
-          <CopyButton text={codeContent} />
-        </div>
-      </div>
-      <div className="relative">
-        <SyntaxHighlighter
-          language={language || "text"}
-          style={vscDarkPlus}
-          customStyle={{
-            margin: 0,
-            padding: "1rem",
-            background: "transparent",
-            fontSize: "13px",
-            lineHeight: "1.6",
-            fontFamily: "var(--font-mono)",
-          }}
-          codeTagProps={{
-            style: {
-              fontFamily: "var(--font-mono)",
-            },
-          }}
-        >
-          {codeContent}
-        </SyntaxHighlighter>
-      </div>
-    </div>
-  );
 }
 
 function MessageContent({
@@ -476,15 +326,22 @@ function MessageContent({
               );
             }
 
-            return (
-              <CodeBlockCard
-                language={language}
-                codeContent={codeString}
-                messageId={messageId}
-                onBookmarkRequest={onBookmarkRequest}
-                className="my-4"
-              />
-            );
+              return (
+                <CodeBlockCard
+                  language={language}
+                  codeContent={codeString}
+                  onBookmarkRequest={messageId && onBookmarkRequest
+                    ? () =>
+                        onBookmarkRequest({
+                          messageId,
+                          language: language || "text",
+                          codeContent: codeString,
+                          defaultTitle: getDefaultBookmarkTitle(codeString),
+                        })
+                    : undefined}
+                  className="my-4"
+                />
+              );
           },
           pre: ({ children }) => <>{children}</>,
           blockquote: ({ children }) => (
@@ -698,24 +555,34 @@ function MessageCard({
       {hasReasoning && <ReasoningPanel reasoning={reasoning} />}
       <div className="text-[15px] text-[var(--chat-ink)]">
         {isUser && isEditing ? (
-          <div className="space-y-3 rounded-2xl border border-[var(--chat-line)] bg-white p-3">
+          <div className="chat-edit-shell space-y-3 rounded-[28px] border px-4 py-3 sm:px-5 sm:py-3.5">
             <textarea
+              ref={(node) => {
+                if (node) {
+                  autoResizeTextarea(node, 160);
+                }
+              }}
               value={editDraft ?? ""}
               autoFocus
               spellCheck={false}
-              className="chat-textarea min-h-[96px] w-full resize-none rounded-xl border border-[var(--chat-line)] bg-transparent px-3 py-2 text-[15px] text-[var(--chat-ink)] outline-none"
+              className="chat-textarea min-h-[54px] w-full resize-none bg-transparent px-1 py-0 text-[15px] leading-7 text-[var(--chat-ink)] outline-none placeholder:text-[var(--chat-muted)]/65"
+              placeholder="继续补充你的请求..."
               onChange={(event) => onEditDraftChange?.(event.target.value)}
               onInput={(e) => {
                 const target = e.target as HTMLTextAreaElement;
-                target.style.height = "auto";
-                target.style.height = `${Math.min(target.scrollHeight, 400)}px`;
+                autoResizeTextarea(target, 160);
               }}
             />
-            <div className="flex items-center justify-end gap-2">
+            <div className="flex flex-col gap-2.5 border-t border-[rgba(15,23,42,0.06)] pt-2.5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="inline-flex items-center gap-2 self-start rounded-full bg-[rgba(15,23,42,0.045)] px-3 py-1 text-[12px] text-[var(--chat-muted)]">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--chat-accent)]" />
+                正在编辑最后一条请求
+              </div>
+              <div className="flex items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={onEditCancel}
-                className="rounded-full border border-[var(--chat-line)] px-3 py-1.5 text-sm text-[var(--chat-muted)] transition-colors hover:text-[var(--chat-ink)]"
+                className="rounded-full px-4 py-2 text-sm font-medium text-[var(--chat-muted)] transition-colors hover:bg-[rgba(15,23,42,0.045)] hover:text-[var(--chat-ink)]"
               >
                 取消
               </button>
@@ -723,10 +590,11 @@ function MessageCard({
                 type="button"
                 onClick={onEditSave}
                 disabled={actionBusy || !(editDraft ?? "").trim()}
-                className="rounded-full bg-[var(--chat-accent)] px-3 py-1.5 text-sm text-white transition-all hover:bg-[#b95b30] disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-full bg-[var(--chat-ink)] px-5 py-2 text-sm font-medium text-white transition-all duration-200 hover:translate-y-[-1px] hover:opacity-92 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                保存并重试
+                发送
               </button>
+              </div>
             </div>
           </div>
         ) : isUser ? (
@@ -852,6 +720,7 @@ export default function ChatSessionPage() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const sessionIdRef = useRef(session.id);
   const shouldAutoScrollRef = useRef(true);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 
   const isNearBottom = useCallback((element: HTMLDivElement) => {
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
@@ -862,14 +731,22 @@ export default function ChatSessionPage() {
     messagesEndRef.current?.scrollIntoView({ behavior, block: "end" });
   }, []);
 
-  const handleMessagesScroll = useCallback(() => {
+  const syncScrollAffordance = useCallback(() => {
     const container = messagesContainerRef.current;
     if (!container) {
+      setShowScrollToBottom(false);
       return;
     }
 
-    shouldAutoScrollRef.current = isNearBottom(container);
+    const nearBottom = isNearBottom(container);
+    const hasOverflow = container.scrollHeight - container.clientHeight > 24;
+    shouldAutoScrollRef.current = nearBottom;
+    setShowScrollToBottom(hasOverflow && !nearBottom);
   }, [isNearBottom]);
+
+  const handleMessagesScroll = useCallback(() => {
+    syncScrollAffordance();
+  }, [syncScrollAffordance]);
 
   const activeModel = models.find((model) => model.id === selectedModel) ?? models[0];
   const lastMessage = messages[messages.length - 1] ?? null;
@@ -925,8 +802,9 @@ export default function ChatSessionPage() {
     shouldAutoScrollRef.current = true;
     requestAnimationFrame(() => {
       scrollToBottom("auto");
+      syncScrollAffordance();
     });
-  }, [initialMessages, scrollToBottom, session.id]);
+  }, [initialMessages, scrollToBottom, session.id, syncScrollAffordance]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -950,11 +828,17 @@ export default function ChatSessionPage() {
 
   useEffect(() => {
     if (!shouldAutoScrollRef.current) {
+      syncScrollAffordance();
       return;
     }
 
     scrollToBottom("auto");
-  }, [messages, pendingAssistant?.content, pendingAssistant?.statusMessage, scrollToBottom]);
+    requestAnimationFrame(syncScrollAffordance);
+  }, [messages, pendingAssistant?.content, pendingAssistant?.statusMessage, scrollToBottom, syncScrollAffordance]);
+
+  useEffect(() => {
+    requestAnimationFrame(syncScrollAffordance);
+  }, [syncScrollAffordance]);
 
   useEffect(() => {
     setActiveLongCodeBlock((current) => {
@@ -1355,7 +1239,7 @@ export default function ChatSessionPage() {
 
       setBookmarkDraft(null);
       revalidator.revalidate();
-      setNotice({ level: "info", message: "代码块已保存到快捷书签" });
+      setNotice({ level: "info", message: "代码块已保存到 Notion 空间" });
       setTimeout(() => setNotice(null), 4000);
     } catch (error) {
       const message = error instanceof Error ? error.message : "保存书签失败";
@@ -1401,21 +1285,17 @@ export default function ChatSessionPage() {
     <div className="relative flex min-h-0 flex-1 flex-col">
       {bookmarkDraft ? (
         <div
-          className="absolute inset-0 z-[65] flex items-center justify-center bg-black/35 px-4"
+          className="pointer-events-none fixed inset-x-0 top-20 z-[65] flex justify-center px-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="bookmark-dialog-title"
-          onClick={() => setBookmarkDraft(null)}
         >
-          <div
-            className="w-full max-w-2xl rounded-2xl border border-[var(--chat-line)] bg-white p-5 shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
+          <div className="pointer-events-auto w-full max-w-2xl rounded-2xl border border-[var(--chat-line)] bg-white p-5 shadow-2xl">
             <h2 id="bookmark-dialog-title" className="text-base font-semibold text-[var(--chat-ink)]">
-              保存代码书签
+              收藏到 Notion 空间
             </h2>
             <p className="mt-1 text-sm text-[var(--chat-muted)]">
-              你可以编辑标题，保存后会显示在侧边栏快捷书签中。
+              你可以编辑标题，保存后会进入独立的 Notion 空间管理页。
             </p>
 
             <label className="mt-4 block text-xs font-medium text-[var(--chat-muted)]">标题</label>
@@ -1428,8 +1308,8 @@ export default function ChatSessionPage() {
             />
 
             <div className="mt-4 rounded-lg border border-[var(--chat-line)] bg-[#1a2822] p-3">
-              <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-[var(--chat-accent)]">
-                <span>{bookmarkDraft.language || "text"}</span>
+              <div className="mb-2 flex items-center gap-2 text-[11px] tracking-[0.14em] text-[var(--chat-accent)]" style={{ fontFamily: "var(--font-mono)" }}>
+                <span>{formatCodeLanguageLabel(bookmarkDraft.language || "text")}</span>
                 <span className="text-white/50">Preview</span>
               </div>
               <pre className="max-h-64 overflow-auto text-xs leading-6 text-white/90" style={{ fontFamily: "var(--font-mono)" }}>
@@ -1467,14 +1347,16 @@ export default function ChatSessionPage() {
       <div className="min-h-0 flex-1">
         <div className={[
           "mx-auto h-full w-full",
-          activeLongCodeBlock ? "gap-0 lg:grid lg:grid-cols-2" : "max-w-4xl px-3 py-4 sm:px-4 lg:px-6 lg:py-6",
+          activeLongCodeBlock ? "gap-0 lg:grid lg:grid-cols-2" : "max-w-4xl",
         ].join(" ")}>
           <section
             ref={messagesContainerRef}
             onScroll={handleMessagesScroll}
             className={[
               "min-h-0 h-full overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
-              activeLongCodeBlock ? "rounded-none border-r border-[var(--chat-line)] bg-[var(--chat-panel)] px-4 py-4 sm:px-6 lg:px-8 lg:py-6" : "",
+              activeLongCodeBlock
+                ? "rounded-none border-r border-[var(--chat-line)] bg-[var(--chat-panel)] px-4 py-4 sm:px-6 lg:px-8 lg:py-6"
+                : "px-3 py-4 sm:px-4 lg:px-6 lg:py-6",
             ].join(" ")}
           >
             <div className={[
@@ -1562,8 +1444,15 @@ export default function ChatSessionPage() {
               <CodeBlockCard
                 language={activeLongCodeBlock.language}
                 codeContent={activeLongCodeBlock.codeContent}
-                messageId={activeLongCodeBlockMessageId}
-                onBookmarkRequest={handleBookmarkRequest}
+                onBookmarkRequest={activeLongCodeBlockMessageId
+                  ? () =>
+                      handleBookmarkRequest({
+                        messageId: activeLongCodeBlockMessageId,
+                        language: activeLongCodeBlock.language || "text",
+                        codeContent: activeLongCodeBlock.codeContent,
+                        defaultTitle: getDefaultBookmarkTitle(activeLongCodeBlock.codeContent),
+                      })
+                  : undefined}
                 className="my-0"
               />
             </aside>
@@ -1571,8 +1460,28 @@ export default function ChatSessionPage() {
         </div>
       </div>
 
-      <div className="safe-bottom px-4 py-4 sm:px-6 lg:px-8">
+      <div className="safe-bottom relative px-4 pb-4 pt-0 sm:px-6 lg:px-8">
         <div className="mx-auto w-full max-w-4xl">
+          {showScrollToBottom ? (
+            <div className="pointer-events-none absolute -top-12 left-1/2 z-20 -translate-x-1/2">
+              <button
+                type="button"
+                onClick={() => {
+                  shouldAutoScrollRef.current = true;
+                  scrollToBottom("smooth");
+                  requestAnimationFrame(syncScrollAffordance);
+                }}
+                className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 bg-white/90 text-gray-400 shadow-sm backdrop-blur-sm transition-all duration-200 hover:border-gray-300 hover:text-gray-500"
+                aria-label="滚动到底部"
+                title="跳到最新消息"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 5v14M5 12l7 7 7-7" />
+                </svg>
+              </button>
+            </div>
+          ) : null}
+
           {notice && (
             <div
               className={`mb-4 rounded-[22px] border px-4 py-3 text-sm ${
@@ -1619,8 +1528,7 @@ export default function ChatSessionPage() {
                   }}
                   onInput={(e) => {
                     const target = e.target as HTMLTextAreaElement;
-                    target.style.height = "auto";
-                    target.style.height = `${Math.min(target.scrollHeight, 220)}px`;
+                    autoResizeTextarea(target, 220);
                   }}
                 />
               </div>

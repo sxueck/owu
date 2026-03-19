@@ -1,5 +1,5 @@
 import type { Route } from "./+types/layout";
-import { Form, Link, NavLink, Outlet, redirect, useLoaderData, useLocation, useRevalidator, useSubmit } from "react-router";
+import { Form, Link, NavLink, Outlet, redirect, useLoaderData, useLocation, useSubmit } from "react-router";
 import { getSession } from "~/sessions";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "~/components/ThemeProvider";
@@ -97,33 +97,16 @@ function formatSessionTitle(title: string) {
   return plainTitle || "New Chat";
 }
 
-function formatBookmarkTitle(title: string) {
-  const normalized = title.replace(/\s+/g, " ").trim();
-  return normalized.length > 0 ? normalized : "Untitled snippet";
-}
-
-function formatBookmarkPreview(codePreview: string) {
-  const normalized = codePreview.replace(/\s+/g, " ").trim();
-  if (normalized.length === 0) {
-    return "(empty code block)";
-  }
-
-  return normalized.length > 30 ? `${normalized.slice(0, 30)}...` : normalized;
-}
-
 export default function ChatLayout() {
   const { user, sessions, bookmarks, version, buildTime } = useLoaderData<typeof loader>();
   const location = useLocation();
   const submit = useSubmit();
-  const revalidator = useRevalidator();
   const { theme, toggleTheme } = useTheme();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [openMenuSessionId, setOpenMenuSessionId] = useState<string | null>(null);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [deleteModalState, setDeleteModalState] = useState<DeleteModalState | null>(null);
-  const [deletingBookmarkId, setDeletingBookmarkId] = useState<string | null>(null);
-  const [bookmarkError, setBookmarkError] = useState<string | null>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -309,36 +292,6 @@ export default function ChatLayout() {
     setDeleteModalState(null);
   };
 
-  const handleDeleteBookmark = async (event: React.MouseEvent<HTMLButtonElement>, bookmarkId: string) => {
-    event.preventDefault();
-    event.stopPropagation();
-
-    if (deletingBookmarkId) {
-      return;
-    }
-
-    setBookmarkError(null);
-    setDeletingBookmarkId(bookmarkId);
-
-    try {
-      const response = await fetch(`/api/bookmarks/${bookmarkId}`, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || "删除书签失败");
-      }
-
-      revalidator.revalidate();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "删除书签失败";
-      setBookmarkError(message);
-    } finally {
-      setDeletingBookmarkId(null);
-    }
-  };
-
   return (
     <div className="chat-shell relative flex h-screen overflow-hidden bg-[var(--color-background)] text-[var(--chat-ink)]">
 
@@ -418,97 +371,45 @@ export default function ChatLayout() {
           </div>
 
           <div className="mt-4 space-y-2">
-            <div className="px-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--chat-muted)]">
-              快捷书签
-            </div>
+            <NavLink
+              to="/chat/notion-space"
+              onClick={() => setIsMobileMenuOpen(false)}
+              className={({ isActive }) => [
+                "flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-sm transition-colors",
+                isActive
+                  ? "border-[var(--chat-line-strong)] bg-[var(--chat-panel)] text-[var(--chat-ink)]"
+                  : "border-[var(--chat-line)] bg-[var(--chat-panel)] text-[var(--chat-ink)] hover:bg-[var(--chat-hover-bg)]",
+              ].join(" ")}
+            >
+              <span className="flex items-center gap-2">
+                <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--chat-hover-bg)] text-[var(--chat-muted)]">
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5v-13Z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8 7h8M8 11h8M8 15h5" />
+                  </svg>
+                </span>
+                <span>
+                  <span className="block font-medium">Notion 空间</span>
+                  <span className="block text-xs text-[var(--chat-muted)]">管理收藏的代码块</span>
+                </span>
+              </span>
+              <span className="rounded-full border border-[var(--chat-line)] px-2 py-0.5 text-xs text-[var(--chat-muted)]">
+                {bookmarks.length}
+              </span>
+            </NavLink>
 
-            {bookmarks.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-[var(--chat-line)] bg-[var(--chat-hover-bg)] px-3 py-2 text-xs text-[var(--chat-muted)]">
-                暂无书签，聊天里的代码块可一键存档
-              </div>
-            ) : (
-              <div className="max-h-56 space-y-1 overflow-y-auto pr-1">
-                {bookmarks.map((bookmark) => (
-                  <div
-                    key={bookmark.id}
-                    className={[
-                      "group/bookmark rounded-lg border px-2.5 py-2 transition-colors",
-                      bookmark.isSessionActive
-                        ? "border-[var(--chat-line)] bg-[var(--chat-panel)]/60 hover:bg-[var(--chat-hover-bg)]"
-                        : "border-[var(--chat-line)] bg-gray-100/70 opacity-50",
-                    ].join(" ")}
-                  >
-                    <div className="flex items-start gap-2">
-                      {bookmark.isSessionActive ? (
-                        <Link
-                          to={`/chat/${bookmark.sessionId}`}
-                          onClick={() => setIsMobileMenuOpen(false)}
-                          className="min-w-0 flex-1"
-                        >
-                          <div className="flex items-center gap-1.5">
-                            <span className="inline-flex h-4 min-w-4 items-center justify-center rounded border border-[var(--chat-line)] bg-[var(--chat-hover-bg)] px-1 text-[10px] font-semibold uppercase text-[var(--chat-muted)]">
-                              {bookmark.language.slice(0, 2) || "--"}
-                            </span>
-                            <span className="truncate text-xs font-medium text-[var(--chat-ink)]">
-                              {formatBookmarkTitle(bookmark.title)}
-                            </span>
-                          </div>
-                          <div className="mt-1 truncate text-[11px] text-[var(--chat-muted)]">
-                            {formatBookmarkPreview(bookmark.codePreview)}
-                          </div>
-                        </Link>
-                      ) : (
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5">
-                            <span className="inline-flex h-4 min-w-4 items-center justify-center rounded border border-[var(--chat-line)] bg-[var(--chat-hover-bg)] px-1 text-[10px] font-semibold uppercase text-[var(--chat-muted)]">
-                              {bookmark.language.slice(0, 2) || "--"}
-                            </span>
-                            <span className="truncate text-xs font-medium text-[var(--chat-ink)]">
-                              {formatBookmarkTitle(bookmark.title)}
-                            </span>
-                          </div>
-                          <div className="mt-1 truncate text-[11px] text-[var(--chat-muted)]">
-                            {formatBookmarkPreview(bookmark.codePreview)}
-                          </div>
-                          <div className="mt-1 text-[10px] font-medium text-red-500">会话已失效</div>
-                        </div>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={(event) => void handleDeleteBookmark(event, bookmark.id)}
-                        disabled={deletingBookmarkId === bookmark.id}
-                        className="mt-0.5 inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-[var(--chat-muted)] hover:bg-[var(--chat-hover-bg)] hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-50"
-                        aria-label="删除书签"
-                        title="删除书签"
-                      >
-                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 7h16m-10 4v6m4-6v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {bookmarkError ? (
-              <div className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[11px] text-red-600">
-                {bookmarkError}
-              </div>
-            ) : null}
+            <NavLink
+              to="/chat"
+              end
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="mt-1 flex items-center gap-2 rounded-lg border border-[var(--chat-line)] bg-[var(--chat-panel)] px-3 py-2 text-sm font-medium text-[var(--chat-ink)] transition-colors hover:bg-[var(--chat-hover-bg)]"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 4v16m8-8H4" />
+              </svg>
+              New Chat
+            </NavLink>
           </div>
-
-          <Link
-            to="/chat"
-            onClick={() => setIsMobileMenuOpen(false)}
-            className="mt-4 flex items-center gap-2 rounded-lg bg-[var(--chat-accent)] px-3 py-2 text-sm font-medium text-white transition-colors hover:opacity-90"
-          >
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 4v16m8-8H4" />
-            </svg>
-            New Chat
-          </Link>
         </div>
 
         <div className="flex-1 overflow-y-auto px-3 py-2">

@@ -10,10 +10,15 @@ export interface UserCodeBookmark {
   messageId: string;
   title: string;
   codePreview: string;
+  codeContent?: string;
   language: string;
   lineNumber: number | null;
   createdAt: Date;
   isSessionActive: boolean;
+}
+
+interface GetUserBookmarksOptions {
+  includeCodeContent?: boolean;
 }
 
 export interface CreateBookmarkInput {
@@ -47,7 +52,11 @@ function sanitizeLanguage(language: string | undefined): string {
   return normalized.length > 0 ? normalized.slice(0, 32) : 'text';
 }
 
-export async function getUserBookmarks(user: SessionData): Promise<UserCodeBookmark[]> {
+export async function getUserBookmarks(
+  user: SessionData,
+  options: GetUserBookmarksOptions = {}
+): Promise<UserCodeBookmark[]> {
+  const { includeCodeContent = false } = options;
   const bookmarks = await prisma.codeBookmark.findMany({
     where: { userId: user.userId },
     orderBy: { createdAt: 'desc' },
@@ -58,6 +67,7 @@ export async function getUserBookmarks(user: SessionData): Promise<UserCodeBookm
       messageId: true,
       title: true,
       codePreview: true,
+      codeContent: includeCodeContent,
       language: true,
       lineNumber: true,
       createdAt: true,
