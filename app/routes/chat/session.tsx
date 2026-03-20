@@ -1,7 +1,7 @@
 import type { Route } from "./+types/session";
 import { useLoaderData, useLocation, useNavigate, useRevalidator } from "react-router";
 import { getSession } from "~/sessions";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent as ReactWheelEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
@@ -749,6 +749,31 @@ export default function ChatSessionPage() {
     syncScrollAffordance();
   }, [syncScrollAffordance]);
 
+  const handleMessagesWheelCapture = useCallback((event: ReactWheelEvent<HTMLElement>) => {
+    const container = messagesContainerRef.current;
+    if (!container || event.defaultPrevented || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
+      return;
+    }
+
+    const nestedScrollable = event.target instanceof HTMLElement
+      ? event.target.closest(".overflow-auto, .overflow-y-auto")
+      : null;
+
+    if (nestedScrollable instanceof HTMLElement && nestedScrollable !== container) {
+      const canConsumeWheel = event.deltaY < 0
+        ? nestedScrollable.scrollTop > 0
+        : nestedScrollable.scrollTop + nestedScrollable.clientHeight < nestedScrollable.scrollHeight - 1;
+
+      if (canConsumeWheel) {
+        return;
+      }
+    }
+
+    container.scrollTop += event.deltaY;
+    syncScrollAffordance();
+    event.preventDefault();
+  }, [syncScrollAffordance]);
+
   const activeModel = models.find((model) => model.id === selectedModel) ?? models[0];
   const lastMessage = messages[messages.length - 1] ?? null;
   const lastAssistantMessage = [...messages].reverse().find((message) => message.role === "assistant") ?? null;
@@ -1358,6 +1383,7 @@ export default function ChatSessionPage() {
           <section
             ref={messagesContainerRef}
             onScroll={handleMessagesScroll}
+            onWheelCapture={handleMessagesWheelCapture}
             className={[
               "min-h-0 h-full overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
               activeLongCodeBlock
