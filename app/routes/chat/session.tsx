@@ -848,11 +848,11 @@ export default function ChatSessionPage() {
       }
 
       if (!current) {
-        return orderedLongCodeBlocks[0];
+        return null;
       }
 
       const refreshedCurrent = orderedLongCodeBlocks.find((block) => block.id === current.id);
-      return refreshedCurrent ?? orderedLongCodeBlocks[0];
+      return refreshedCurrent ?? null;
     });
   }, [orderedLongCodeBlocks]);
 
@@ -1443,9 +1443,22 @@ export default function ChatSessionPage() {
             <aside className="min-h-0 h-full overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden rounded-none border-l border-[var(--chat-line)] bg-[var(--chat-panel)] p-4 lg:p-6">
               <div className="sticky top-0 z-10 mb-3 flex items-center justify-between rounded-lg border border-[var(--chat-line)] bg-[var(--chat-panel)] px-3 py-2 text-xs text-[var(--chat-muted)]">
                 <span>右侧代码视图</span>
-                <span>
-                  #{activeLongCodeBlock.sequence + 1} · {activeLongCodeBlock.lineCount} 行
-                </span>
+                <div className="flex items-center gap-2">
+                  <span>
+                    #{activeLongCodeBlock.sequence + 1} · {activeLongCodeBlock.lineCount} 行
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveLongCodeBlock(null)}
+                    className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded hover:bg-[var(--chat-line)] transition-colors"
+                    title="收回"
+                    aria-label="收回代码视图"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
               </div>
               <CodeBlockCard
                 language={activeLongCodeBlock.language}
