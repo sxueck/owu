@@ -48,6 +48,61 @@ function getSessionTokenUsageStorageKey(sessionId: string): string {
   return `chat-session-token-usage:${sessionId}`;
 }
 
+async function copyToClipboard(text: string): Promise<void> {
+  if (typeof window === "undefined") {
+    throw new Error("Clipboard is not available outside browser context");
+  }
+
+  if (window.isSecureContext && window.navigator.clipboard?.writeText) {
+    await window.navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.setAttribute("readonly", "true");
+  textArea.style.position = "fixed";
+  textArea.style.top = "0";
+  textArea.style.left = "-9999px";
+  textArea.style.opacity = "0";
+
+  document.body.appendChild(textArea);
+  try {
+    textArea.focus();
+    textArea.select();
+    textArea.setSelectionRange(0, textArea.value.length);
+
+    const copied = document.execCommand("copy");
+    if (!copied) {
+      throw new Error("Copy command failed");
+    }
+  } finally {
+    document.body.removeChild(textArea);
+  }
+}
+
+function InlineCode({ text, children, ...props }: { text: string; children: React.ReactNode }) {
+  const handleClick = async () => {
+    try {
+      await copyToClipboard(text);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    }
+  };
+
+  return (
+    <code
+      onClick={handleClick}
+      className="cursor-pointer rounded-md bg-[rgba(20,33,28,0.08)] px-1.5 py-0.5 text-[0.9em] transition-colors duration-150 hover:bg-[rgba(20,33,28,0.16)]"
+      style={{ fontFamily: "var(--font-mono)" }}
+      title="点击复制"
+      {...props}
+    >
+      {children}
+    </code>
+  );
+}
+
 interface CodeBookmarkPayload {
   messageId: string;
   language: string;
@@ -274,9 +329,9 @@ function MessageContent({
 
             if (isInline) {
               return (
-                <code className="rounded-md bg-[rgba(20,33,28,0.08)] px-1.5 py-0.5 text-[0.9em] transition-colors duration-150 hover:bg-[rgba(20,33,28,0.12)]" style={{ fontFamily: "var(--font-mono)" }} {...props}>
+                <InlineCode text={codeString} {...props}>
                   {children}
-                </code>
+                </InlineCode>
               );
             }
 
@@ -980,7 +1035,7 @@ export default function ChatSessionPage() {
         role: "assistant",
         content: "",
         reasoning: "",
-        statusMessage: "模型正在思考中...",
+        statusMessage: "模型正在思考中",
         model,
         modelLabel: selectedOption?.label ?? session.modelLabel,
         createdAt: new Date(),
@@ -1449,7 +1504,7 @@ export default function ChatSessionPage() {
                     <MessageCard
                       id={pendingAssistant.id}
                       role="assistant"
-                      content={pendingAssistant.content || (pendingAssistant.statusMessage ? "" : "...")}
+                      content={pendingAssistant.content || (pendingAssistant.statusMessage ? "" : "")}
                       reasoning={pendingAssistant.reasoning || null}
                       pendingStatus={pendingAssistant.statusMessage}
                       pending
